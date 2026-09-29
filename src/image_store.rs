@@ -153,8 +153,16 @@ struct Inner {
     next_id: u64,
     current_id: u64,
     display_px: (u32, u32),
+    /// Dimensões de `display_img` **antes** de qualquer edição.
+    ///
+    /// `apply_preview` reescreve `display_img` com a imagem já transformada,
+    /// então esta é a única cópia estável da geometria base — a que rotate,
+    /// crop e bake precisam para não derivarem a cada clique.
+    base_px: (u32, u32),
     full_px: (u32, u32),
     display_img: Option<image::DynamicImage>,
+    /// Cópia de `display_img` ainda sem edição, para desfazer o preview.
+    base_display: Option<image::DynamicImage>,
     full: Option<image::DynamicImage>,
     error: Option<String>,
     has_selection: bool,
@@ -196,8 +204,10 @@ impl ImageStore {
             next_id: 0,
             current_id: 0,
             display_px: (0, 0),
+            base_px: (0, 0),
             full_px: (0, 0),
             display_img: None,
+            base_display: None,
             full: None,
             error: None,
             has_selection: false,
@@ -213,6 +223,8 @@ impl ImageStore {
         inner.full_px = dec.full_size;
         let base = dec.display.clone();
         inner.display_px = (base.width(), base.height());
+        inner.base_px = (base.width(), base.height());
+        inner.base_display = Some(dec.display);
         inner.display_img = Some(base);
         inner.full = Some(dec.full);
         inner.publish_dirty = true;
@@ -263,6 +275,10 @@ impl ImageStore {
             inner.display_img = None;
             inner.full = None;
             inner.display_px = (0, 0);
+            inner.base_px = (0, 0);
+            inner.display_img = None;
+            inner.base_display = None;
+            inner.full = None;
             inner.error = None;
             inner.publish_dirty = true;
             // Cache de prefetch: caminho quente, sem thread.
@@ -387,7 +403,10 @@ impl ImageStore {
     pub fn apply_preview(&self, edit: Option<&EditorState>, load: State<LoadState>) {
         {
             let mut inner = self.0.borrow_mut();
-            let Some(base) = inner.display_img.clone() else {
+            // Sempre a partir de `base_display`, nunca do preview anterior:
+            // aplicar duas vezes sobre o resultado anterior compunha as
+            // transformações e o crop saía do lugar depois do 2º clique.
+            let Some(base) = inner.base_display.clone() else {
                 return;
             };
             let shown = match edit {
@@ -401,14 +420,17 @@ impl ImageStore {
         self.poll(load);
     }
 
-    /// Dimensões da imagem de display pré-edição (para rotate/bake).
+    /// Dimensões da imagem de display **antes** de qualquer edição.
+    ///
+    /// Não pode ler `display_img`: `apply_preview` sobrescreve esse campo com
+    /// a imagem já rotacionada/cropada, e a 2ª rotação acabaria rotacionando o
+    /// crop contra as dimensões erradas (a imagem "desalinha" a partir do
+    /// segundo clique). Guarda a base à parte, em `base_px`.
     #[must_use]
     pub fn display_base_dims(&self) -> Option<(u32, u32)> {
-        self.0
-            .borrow()
-            .display_img
-            .as_ref()
-            .map(|d| (d.width(), d.height()))
+        let inner = self.0.borrow();
+        let (w, h) = inner.base_px;
+        (w > 0 && h > 0).then_some((w, h))
     }
 
     /// Cópia da full-res para o thread de salvamento.
@@ -469,5 +491,134 @@ mod tests {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(8, 4));
         let handle = image_handle(&img).expect("handle");
         assert_eq!((handle.image.width(), handle.image.height()), (8, 4));
+    }
+
+    /// Instala uma imagem de `w`×`h` como se tivesse sido decodificada.
+    fn install_sized(store: &ImageStore, w: u32, h: u32) {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(w, h));
+        let mut inner = store.0.borrow_mut();
+        ImageStore::install(
+            &mut inner,
+            DecodedPhoto {
+                display: img.clone(),
+                full: img,
+                full_size: (w, h),
+            },
+        );
+    }
+
+    /// Instala a partir de um arquivo real (usa o decoder de verdade).
+    fn install_file(store: &ImageStore, path: &Path) {
+        let dec = decode_photo(path).expect("decode");
+        let mut inner = store.0.borrow_mut();
+        ImageStore::install(&mut inner, dec);
+    }
+
+    /// Recria o preview sem passar pelo `State` do Freya.
+    ///
+    /// `apply_preview` chama `poll`, que escreve no `State` — e `State::write`
+    /// exige um contexto Freya ativo. Fora da janela (nos testes) isso estoura,
+    /// então esta cópia da mesma lógica roda direto no `Inner`.
+    fn preview(inner: &mut Inner, edit: Option<&crate::editor::EditorState>) {
+        let Some(base) = inner.base_display.clone() else {
+            return;
+        };
+        let shown = match edit {
+            Some(edit) => crate::editor::apply_to_image(&base, edit),
+            None => base,
+        };
+        inner.display_px = (shown.width(), shown.height());
+        inner.display_img = Some(shown);
+        inner.publish_dirty = true;
+    }
+
+    #[test]
+    fn base_dims_survive_repeated_rotation() {
+        // Regressão: `apply_preview` sobrescreve `display_img` com a imagem já
+        // rotacionada. Ler as dims de lá fazia a 2ª rotação derivar, e a partir
+        // daí o crop saía do lugar a cada clique.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = write_test_png(dir.path(), "a.png", 4, 2);
+        let store = ImageStore::new();
+        install_sized(&store, 400, 200);
+        assert_eq!(store.display_base_dims(), Some((400, 200)));
+
+        let mut editor = crate::editor::EditorStack::default();
+
+        // 1ª rotação: retrato.
+        editor.rotate_cw(store.display_base_dims().expect("base"));
+        preview(&mut store.0.borrow_mut(), Some(&editor.state()));
+        assert_eq!(store.display_base_dims(), Some((400, 200)));
+
+        // 2ª rotação: volta ao tamanho original, e a base continua 400×200.
+        editor.rotate_cw(store.display_base_dims().expect("base"));
+        preview(&mut store.0.borrow_mut(), Some(&editor.state()));
+        assert_eq!(store.display_base_dims(), Some((400, 200)));
+
+        // Duas rotações horário = meia volta, que é o estado intermediário esperado
+        // (e `rot` acumula, não satura).
+        assert_eq!(editor.state().rot, 2);
+    }
+
+    #[test]
+    fn preview_always_starts_from_the_unedited_image() {
+        // Aplicar o mesmo preview duas vezes não pode acumular transformação.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = write_test_png(dir.path(), "b.png", 4, 2);
+        let store = ImageStore::new();
+        install_sized(&store, 400, 200);
+
+        let mut editor = crate::editor::EditorStack::default();
+        editor.rotate_cw((400, 200));
+        let once = editor.state();
+
+        preview(&mut store.0.borrow_mut(), Some(&once));
+        let first = store.display_base_dims();
+        // Segundo `apply_preview` com o MESMO estado tem que dar o mesmo
+        // resultado — não o resultado rotacionado duas vezes.
+        preview(&mut store.0.borrow_mut(), Some(&once));
+        assert_eq!(store.display_base_dims(), first);
+        assert_eq!(store.display_base_dims(), Some((400, 200)));
+    }
+
+    #[test]
+    fn preview_without_edit_restores_the_base_image() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = write_test_png(dir.path(), "c.png", 4, 2);
+        let store = ImageStore::new();
+        install_sized(&store, 400, 200);
+
+        let mut editor = crate::editor::EditorStack::default();
+        editor.rotate_cw((400, 200));
+        preview(&mut store.0.borrow_mut(), Some(&editor.state()));
+        // Reset: `edit = None` precisa devolver a imagem original.
+        preview(&mut store.0.borrow_mut(), None);
+        assert_eq!(store.display_base_dims(), Some((400, 200)));
+        assert_eq!(
+            store
+                .0
+                .borrow()
+                .display_img
+                .as_ref()
+                .map(|d| (d.width(), d.height())),
+            Some((400, 200))
+        );
+    }
+
+    #[test]
+    fn changing_photo_resets_base_dims() {
+        // Trocar de foto não pode herdar as dims da anterior: senão o crop da
+        // foto nova nasceria com a geometria da antiga.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = write_test_png(dir.path(), "d1.png", 4, 2);
+        let b = write_test_png(dir.path(), "d2.png", 3, 5);
+        let store = ImageStore::new();
+
+        install_file(&store, &a);
+        assert_eq!(store.display_base_dims(), Some((4, 2)));
+
+        store.select(&crate::fs_browser::PhotoPath::new(b.clone()).expect("photo b"));
+        install_file(&store, &b);
+        assert_eq!(store.display_base_dims(), Some((3, 5)));
     }
 }

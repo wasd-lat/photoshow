@@ -17,12 +17,14 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::prelude::*;
-use freya::radio::{RadioChannel, use_radio};
+use freya::prelude::consume_context;
+use freya::radio::{Radio, RadioChannel, RadioStation, use_radio};
+use torin::geometry::Vector2D;
 
 use crate::config::AppConfig;
 use crate::editor::EditorStack;
 use crate::fs_browser::{self, PhotoPath, ScanOptions};
+use crate::prelude::ScreenRect;
 
 use super::services::Services;
 
@@ -663,6 +665,7 @@ pub fn set_thumb_size(state: &mut AppState, size: f32) -> bool {
 mod tests {
     use super::*;
     use crate::app::crop;
+    use crate::prelude::{Point2D, ScreenRect, Size2D};
 
     fn photo(name: &str) -> PhotoPath {
         PhotoPath::new(PathBuf::from(name)).expect("extensão válida")

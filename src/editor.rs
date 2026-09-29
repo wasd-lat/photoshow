@@ -52,10 +52,18 @@ impl EditorState {
 }
 
 /// Pilha de edição com undo/redo (snapshots baratos: 2 campos).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EditorStack {
     history: Vec<EditorState>,
     future: Vec<EditorState>,
+}
+
+/// `Default` manual: o derivado criaria `history` vazio, e a pilha sempre
+/// precisa de pelo menos o estado limpo como base do undo.
+impl Default for EditorStack {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditorStack {
@@ -69,9 +77,14 @@ impl EditorStack {
     }
 
     /// Estado atual.
+    ///
+    /// Usa `last()` com fallback em vez de `expect`: o `Default` derivado
+    /// criava `history` **vazio**, e qualquer `EditorStack::default()`
+    /// entrava em pânico aqui. `Default` manual (abaixo) já garante o
+    /// estado limpo, mas o fallback mantém a função total.
     #[must_use]
     pub fn state(&self) -> EditorState {
-        *self.history.last().expect("histórico nunca vazio")
+        self.history.last().copied().unwrap_or_default()
     }
 
     /// Há edições pendentes?

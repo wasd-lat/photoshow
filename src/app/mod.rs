@@ -96,39 +96,76 @@ struct Panels;
 impl Component for Panels {
     fn render(&self) -> impl IntoElement {
         let maximized = channel(AppChannel::Viewer).read().maximized;
+        let cfg = channel(AppChannel::Config);
+        let (hide_browser, hide_gallery) = {
+            let c = cfg.read();
+            (c.config.hide_browser, c.config.hide_gallery)
+        };
 
+        // Maximizado, navegador oculto ou galeria oculta viram layouts
+        // diferentes — e não "painel com 0%". `ResizablePanel` continua
+        // desenhando a alça de arraste, então um painel de 0% deixaria um
+        // sulco de 4px e o conteúdo ainda poderia ser mirado.
         if maximized {
-            return ResizableContainer::new()
-                .direction(Direction::Horizontal)
-                .panel(ResizablePanel::new(PanelSize::percent(100.)).child(viewer::Viewer))
-                .into_element();
+            return only(viewer::Viewer);
         }
 
-        ResizableContainer::new()
-            .direction(Direction::Horizontal)
+        let vertical = ResizableContainer::new()
+            .direction(Direction::Vertical)
             .panel(
-                ResizablePanel::new(PanelSize::percent(24.))
-                    .min_size(12.)
-                    .child(browser::Browser),
+                ResizablePanel::new(PanelSize::percent(80.))
+                    .min_size(20.)
+                    .child(viewer::Viewer),
             )
             .panel(
-                ResizablePanel::new(PanelSize::percent(76.)).child(
-                    ResizableContainer::new()
-                        .direction(Direction::Vertical)
-                        .panel(
-                            ResizablePanel::new(PanelSize::percent(80.))
-                                .min_size(20.)
-                                .child(viewer::Viewer),
-                        )
-                        .panel(
-                            ResizablePanel::new(PanelSize::percent(20.))
-                                .min_size(8.)
-                                .child(gallery::Gallery),
-                        ),
-                ),
-            )
-            .into_element()
+                ResizablePanel::new(PanelSize::percent(20.))
+                    .min_size(8.)
+                    .child(gallery::Gallery),
+            );
+
+        match (hide_browser, hide_gallery) {
+            (true, true) => only(viewer::Viewer),
+            (true, false) => ResizableContainer::new()
+                .direction(Direction::Horizontal)
+                .panel(
+                    ResizablePanel::new(PanelSize::percent(80.))
+                        .min_size(20.)
+                        .child(viewer::Viewer),
+                )
+                .panel(
+                    ResizablePanel::new(PanelSize::percent(20.))
+                        .min_size(8.)
+                        .child(gallery::Gallery),
+                )
+                .into_element(),
+            (false, true) => ResizableContainer::new()
+                .direction(Direction::Horizontal)
+                .panel(
+                    ResizablePanel::new(PanelSize::percent(24.))
+                        .min_size(12.)
+                        .child(browser::Browser),
+                )
+                .panel(ResizablePanel::new(PanelSize::percent(76.)).child(viewer::Viewer))
+                .into_element(),
+            (false, false) => ResizableContainer::new()
+                .direction(Direction::Horizontal)
+                .panel(
+                    ResizablePanel::new(PanelSize::percent(24.))
+                        .min_size(12.)
+                        .child(browser::Browser),
+                )
+                .panel(ResizablePanel::new(PanelSize::percent(76.)).child(vertical))
+                .into_element(),
+        }
     }
+}
+
+/// Dock de um painel só (sem alça de arraste sobrando).
+fn only(child: impl IntoElement) -> Element {
+    ResizableContainer::new()
+        .direction(Direction::Horizontal)
+        .panel(ResizablePanel::new(PanelSize::percent(100.)).child(child))
+        .into_element()
 }
 
 /// Reabre a última pasta salva, se a opção estiver ligada.

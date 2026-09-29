@@ -3,14 +3,14 @@
 use freya::components::{Button, ScrollView, Slider};
 
 use crate::fs_browser::PhotoPath;
-use crate::icons;
 use crate::prelude::*;
 use crate::thumbs::ThumbMap;
+use crate::ui;
 
 use super::services::Services;
 use super::state::{self, AppChannel, AppState, channel};
 
-/// Espaçamento entre células da grade.
+/// Espaçamento entre células da grade (multiplicado pela escala da UI).
 const GAP: f32 = 8.0;
 /// Quantas fotos ficam em volta da seleção (evita travar o frame).
 const WINDOW: usize = 300;
@@ -29,17 +29,24 @@ impl Component for Gallery {
         let photos = channel(AppChannel::Photos);
         let config = channel(AppChannel::Config);
         let snapshot = photos.read().clone();
+        let m = ui::Metrics::new(config.read().config.ui_scale);
         let enabled = config.read().config.show_filmstrip;
-        let cell = state::thumb_size(&config.read());
+        // O thumbnail é conteúdo, não texto: escala junto, mas no máximo 1.4x,
+        // senão uma miniatura grande come a janela inteira.
+        let cell =
+            (state::thumb_size(&config.read()) * m.scale().min(1.4)).clamp(CELL_MIN, CELL_MAX);
 
         if !enabled {
             return rect()
                 .expanded()
-                .padding(10.)
-                .child(weak("Galeria desativada — ative em Config."));
+                .padding(ui::gaps(&m, 2.5, 2.5))
+                .child(ui::faint(&m, "Galeria desativada — ative em Config."));
         }
         if snapshot.visible.is_empty() {
-            return rect().expanded().padding(10.).child(weak("Nenhuma foto."));
+            return rect()
+                .expanded()
+                .padding(ui::gaps(&m, 2.5, 2.5))
+                .child(ui::faint(&m, "Nenhuma foto."));
         }
 
         // Enfileira/drena miniaturas da janela em torno da seleção.
@@ -50,10 +57,11 @@ impl Component for Gallery {
         rect()
             .expanded()
             .vertical()
-            .padding(8.)
-            .spacing(6.)
-            .child(size_controls(cell))
+            .padding(ui::gaps(&m, 2., 2.))
+            .spacing(m.gap(1.5))
+            .child(size_controls(&m, cell))
             .child(ScrollView::new().expanded().child(grid(
+                &m,
                 snapshot.visible,
                 snapshot.sel,
                 thumbs,
@@ -65,36 +73,48 @@ impl Component for Gallery {
 }
 
 /// Cabeçalho: `−` slider `＋` e o valor em px.
-fn size_controls(cell: f32) -> impl IntoElement {
+fn size_controls(m: &ui::Metrics, cell: f32) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(8.)
-        .child(weak("Tamanho:"))
-        .child(
+        .spacing(m.gap(2.))
+        .child(ui::text(
+            m,
+            ui::Role::Small,
+            Color::from_argb(190, 140, 140, 148),
+            "Tamanho:",
+        ))
+        .child(ui::icon_button(
+            m,
+            "minus",
+            "Diminuir miniaturas",
             Button::new()
                 .flat()
-                .compact()
-                .on_press(move |_| set_thumb_size(cell - 16.0))
-                .child(icons::icon("minus")),
-        )
+                .on_press(move |_| set_thumb_size(cell - 16.0)),
+        ))
         .child(
             Slider::new(move |v: f64| {
-                set_thumb_size(CELL_MIN + (v as f32 / 100.0) * (CELL_MAX - CELL_MIN));
+                set_thumb_size(CELL_MIN + (v / 100.0) as f32 * (CELL_MAX - CELL_MIN));
             })
-            .value(((cell - CELL_MIN) / (CELL_MAX - CELL_MIN) * 100.0) as f64)
-            .size(Size::px(160.))
+            .value(f64::from((cell - CELL_MIN) / (CELL_MAX - CELL_MIN) * 100.0))
+            .size(Size::px(m.gap(40.)))
             .scroll_enabled(false),
         )
-        .child(
+        .child(ui::icon_button(
+            m,
+            "plus",
+            "Aumentar miniaturas",
             Button::new()
                 .flat()
-                .compact()
-                .on_press(move |_| set_thumb_size(cell + 16.0))
-                .child(icons::icon("plus")),
-        )
-        .child(weak(&format!("{cell:.0}px")))
+                .on_press(move |_| set_thumb_size(cell + 16.0)),
+        ))
+        .child(ui::text(
+            m,
+            ui::Role::Small,
+            Color::from_argb(190, 140, 140, 148),
+            format!("{cell:.0}px"),
+        ))
 }
 
 /// Aplica e persiste o tamanho do thumbnail.
@@ -107,16 +127,9 @@ fn set_thumb_size(size: f32) {
     });
 }
 
-/// Texto secundário.
-fn weak(text: &str) -> impl IntoElement {
-    label()
-        .font_size(13.0)
-        .color((120, 120, 128))
-        .text(text.to_owned())
-}
-
 /// Grade fluida: `wrap` deixa as colunas se adaptarem à largura do painel.
 fn grid(
+    m: &ui::Metrics,
     photos: Vec<PhotoPath>,
     sel: Option<usize>,
     thumbs: ThumbMap,
@@ -141,10 +154,11 @@ fn grid(
     rect()
         .width(Size::fill())
         .horizontal()
-        .content(Content::wrap_spacing(GAP))
+        .content(Content::wrap_spacing(GAP * m.scale()))
         .children(slice.into_iter().map(|(index, photo)| {
             let handle = thumbs.get(photo.path()).cloned();
             cell_view(
+                m,
                 index,
                 photo,
                 handle,
@@ -159,6 +173,7 @@ fn grid(
 /// Uma célula da grade: thumb (ou placeholder) + borda de seleção.
 #[allow(clippy::too_many_arguments)]
 fn cell_view(
+    m: &ui::Metrics,
     index: usize,
     photo: PhotoPath,
     handle: Option<ImageHandle>,
@@ -190,18 +205,16 @@ fn cell_view(
     };
     let on_press: EventHandler<Event<PointerEventData>> = on_press.into();
 
-    let on_menu: EventHandler<Event<PressEventData>> = (move |_| {
-        super::viewer::open_context_menu();
-    })
-    .into();
+    let on_menu: EventHandler<Event<PressEventData>> =
+        (move |_| super::viewer::open_context_menu()).into();
 
     rect()
         .key(index)
         .width(Size::px(cell))
         .height(Size::px(cell))
-        .corner_radius(6.)
+        .corner_radius(m.radius_sm())
         .overflow(Overflow::Clip)
-        .background((42, 42, 46))
+        .background(Color::from_rgb(40, 40, 43))
         .maybe_child(handle.map(|h| {
             // Célula quadrada, foto 4:3: sem centralizar sobraria uma faixa
             // morta embaixo de toda miniatura.

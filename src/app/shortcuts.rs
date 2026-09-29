@@ -42,6 +42,33 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
         return named_shortcut(*named, services);
     }
 
+    // Painéis: Ctrl+1 / Ctrl+2 recolhem navegador e galeria.
+    if ctrl && code == Code::Digit1 {
+        toggle_panel(Panel::Browser);
+        return true;
+    }
+    if ctrl && code == Code::Digit2 {
+        toggle_panel(Panel::Gallery);
+        return true;
+    }
+    if ctrl && code == Code::Digit0 {
+        restore_panels();
+        return true;
+    }
+    // Escala tipográfica: Ctrl+= / Ctrl+- (com shift, menor).
+    if ctrl && matches!(code, Code::Equal | Code::NumpadAdd) {
+        if shift {
+            scale_ui(-crate::config::UI_SCALE_STEP);
+        } else {
+            scale_ui(crate::config::UI_SCALE_STEP);
+        }
+        return true;
+    }
+    if ctrl && matches!(code, Code::Minus | Code::NumpadSubtract) {
+        scale_ui(-crate::config::UI_SCALE_STEP);
+        return true;
+    }
+
     // Teclas de posição: ctrl+Z / ctrl+Y e os de zoom.
     if ctrl && code == Code::KeyZ {
         if shift {
@@ -116,6 +143,51 @@ fn named_shortcut(key: NamedKey, services: Services) -> bool {
     false
 }
 
+/// Painel recolhível da janela principal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    /// Navegador lateral.
+    Browser,
+    /// Galeria inferior.
+    Gallery,
+}
+
+/// Recolhe/expande um painel e persiste (função pura de decisão).
+///
+/// Separado da escrita para ser testável sem janela: ver os testes no fim.
+#[must_use]
+pub fn next_visibility(current: bool) -> bool {
+    !current
+}
+
+/// Recolhe/expande um painel.
+pub fn toggle_panel(panel: Panel) {
+    state::update(AppChannel::Config, |st| match panel {
+        Panel::Browser => st.config.hide_browser = next_visibility(st.config.hide_browser),
+        Panel::Gallery => st.config.hide_gallery = next_visibility(st.config.hide_gallery),
+    });
+    state::update(AppChannel::Config, |st| {
+        st.config.save().ok();
+    });
+}
+
+/// Mostra os dois painéis de volta (Ctrl+0 e "Restaurar layout").
+pub fn restore_panels() {
+    state::update(AppChannel::Config, |st| {
+        st.config.hide_browser = false;
+        st.config.hide_gallery = false;
+        st.config.save().ok();
+    });
+}
+
+/// Ajusta a escala tipográfica e persiste.
+pub fn scale_ui(delta: f32) {
+    state::update(AppChannel::Config, |st| {
+        st.config.ui_scale = crate::config::sanitize_ui_scale(st.config.ui_scale + delta);
+        st.config.save().ok();
+    });
+}
+
 /// `Esc`: fecha modal, sai de fullscreen ou cancela o crop (nesta ordem).
 fn escape() -> bool {
     if state::snapshot().rename_open || state::snapshot().settings_open {
@@ -165,4 +237,34 @@ fn photos(f: impl FnOnce(&mut state::AppState)) {
 
 fn edit(f: impl FnOnce(&mut state::AppState)) {
     state::update(AppChannel::Edit, f);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visibility_toggles_both_ways() {
+        assert!(next_visibility(false));
+        assert!(!next_visibility(true));
+    }
+
+    #[test]
+    fn scale_delta_clamps_at_both_ends() {
+        // Comportamento equivalente ao que o handler faz, sem janela.
+        let mut scale = 1.0_f32;
+        for _ in 0..40 {
+            scale = crate::config::sanitize_ui_scale(scale + crate::config::UI_SCALE_STEP);
+        }
+        assert_eq!(scale, crate::config::UI_SCALE_MAX);
+        for _ in 0..40 {
+            scale = crate::config::sanitize_ui_scale(scale - crate::config::UI_SCALE_STEP);
+        }
+        assert_eq!(scale, crate::config::UI_SCALE_MIN);
+    }
+
+    #[test]
+    fn panel_enum_is_distinct() {
+        assert_ne!(Panel::Browser, Panel::Gallery);
+    }
 }

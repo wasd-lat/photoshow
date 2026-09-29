@@ -90,12 +90,36 @@ pelo menu Config dentro do app.
 | `src/exif.rs` | orientação EXIF (puro) |
 | `src/config.rs` | preferências persistidas (puro) |
 | `src/theme.rs` | temas Freya (slate, charcoal, frost, paper) |
+| `src/ui.rs` | design system: métricas, primitivas e o dropdown ancorado |
 
 O domínio (`editor`, `exif`, `fs_browser`, `config`) não conhece a GUI
 e é testado sem janela. `src/lib.rs` guarda os módulos e `src/main.rs`
 só faz o `launch`, o que deixa `tests/pipeline.rs` testar o caminho
 inteiro (varredura → decode → edição → bake → gravação → releitura)
 sem abrir janela.
+
+`src/ui.rs` é a fonte única de medidas de UI (escala tipográfica, espaçamento,
+raio, alvo de clique) e de duas peças que não existem prontas no Freya: o
+dropdown ancorado fora do fluxo e o texto de uma linha só. Nenhuma decisão de
+produto mora lá — quando algo é regra de negócio, vai para `config.rs` (com
+teste) ou `state.rs` (função pura), e a troca de toolkit não leva a decisão
+junto.
+
+### Atalhos
+
+| | |
+|---|---|
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+0` | recolher navegador / galeria / restaurar |
+| `Ctrl+=` / `Ctrl+-` | tamanho do texto (75%–140%) |
+| `←` `→` | foto anterior / próxima |
+| `+` `-` `0` | zoom in / out / ajustar |
+| arraste | pan (quando a imagem passa da viewport) |
+| duplo clique | ajustar à viewport |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | desfazer / refazer |
+| `F2` | renomear |
+| `F9` | maximizar visualizador |
+| `F11` | fullscreen |
+| `Esc` | fecha modal, sai de fullscreen, cancela crop |
 
 ## Desenvolvimento
 

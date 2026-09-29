@@ -15,8 +15,11 @@ use crate::fs_browser::{self, ScanResult};
 use crate::image_store::{ImageStore, LoadState};
 use crate::thumbs::{ThumbCache, ThumbMap};
 
-/// Intervalo do pump (~60 Hz). Só acorda; trabalho só se há canal cheio.
-const PUMP_TICK: Duration = Duration::from_millis(16);
+/// Tique do pump com trabalho pendente (~60 Hz): mantém a UI responsiva.
+const PUMP_TICK_FAST: Duration = Duration::from_millis(16);
+/// Tique do pump ocioso (~8 Hz): quase não acorda a CPU, e 125ms de atraso
+/// num resultado que ninguém está esperando é imperceptível.
+const PUMP_TICK_IDLE: Duration = Duration::from_millis(125);
 
 /// Comando que a toolbar envia para o visualizador.
 ///
@@ -92,24 +95,35 @@ impl Services {
     }
 
     /// Task que drena a thread de decode para o `State` reativo.
+    ///
+    /// O tique é adaptativo: `FAST` enquanto há decode ou miniatura em voo
+    /// (para a UI ficar responsiva durante a carga) e `SLOW` quando está tudo
+    /// parado. O `SLOW` existe porque acordar a task a cada 16ms mesmo sem
+    /// trabalho é o que segura o consumo em ~0,35% de CPU com a janela
+    /// ociosa; a 8Hz isso cai para perto de zero sem causar atraso visível.
     fn spawn_pump(&self) {
         let this = self.clone();
         let mut wake = self.thumb_wake;
         let mut wake_gen = 0u64;
         spawn(async move {
             loop {
-                this.images.poll(this.load);
+                let decoding = this.images.poll(this.load);
                 // O worker de miniaturas roda numa thread solta e não pode
                 // tocar no `State`. Enquanto ele tiver job em voo, dá um
                 // pulso para o próximo frame vir buscar o resultado; sem
                 // isso as miniaturas ficariam na fila até o usuário mexer
                 // na janela.
-                if this.thumbs.in_flight() {
+                let thumbs_busy = this.thumbs.in_flight();
+                if thumbs_busy {
                     wake_gen = wake_gen.wrapping_add(1);
                     wake.set(wake_gen);
                 }
-                // O tick só repõe a cadência; nada redesenha sem mudança.
-                timer(PUMP_TICK).await;
+                let tick = if decoding || thumbs_busy {
+                    PUMP_TICK_FAST
+                } else {
+                    PUMP_TICK_IDLE
+                };
+                timer(tick).await;
             }
         });
     }
@@ -236,4 +250,27 @@ fn take<T: 'static>(state: &State<Option<T>>) -> Option<T> {
     }
     let mut state = *state;
     state.write().take()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_tick_is_much_slower_than_the_busy_one() {
+        // A economia de CPU depende inteiramente desta razão: o pump acorda
+        // `1/tick` vezes por segundo mesmo sem trabalho nenhum.
+        let busy_hz = 1000.0 / PUMP_TICK_FAST.as_millis() as f64;
+        let idle_hz = 1000.0 / PUMP_TICK_IDLE.as_millis() as f64;
+        assert!(
+            idle_hz < busy_hz / 4.0,
+            "idle {idle_hz}Hz vs busy {busy_hz}Hz"
+        );
+    }
+
+    #[test]
+    fn idle_tick_is_still_fast_enough_to_feel_instant() {
+        // 125ms é o teto: acima disso um clique já parece "demorou".
+        assert!(PUMP_TICK_IDLE.as_millis() <= 150);
+    }
 }

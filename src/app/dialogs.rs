@@ -9,8 +9,9 @@ use freya::components::{
     Button, Input, MenuItem, Popup, PopupButtons, PopupContent, PopupTitle, Select, Slider, Switch,
 };
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, UI_SCALE_MAX, UI_SCALE_MIN};
 use crate::prelude::*;
+use crate::ui;
 
 use super::services::Services;
 use super::state::{self, AppChannel, channel};
@@ -98,65 +99,81 @@ impl Component for SettingsDialog {
         let switch_id = use_a11y();
         let theme_state = use_consume::<State<freya::components::Theme>>();
         let cfg = channel(AppChannel::Config).read().config.clone();
+        // O modal respeita a escala global: se o texto da app é grande, o
+        // diálogo grande é legível — o inverso deixaria os botões ilegíveis.
+        let m = ui::Metrics::new(cfg.ui_scale);
 
         let close: EventHandler<Event<PressEventData>> = (move |_| close_settings()).into();
 
         let body = rect()
             .vertical()
-            .spacing(8.)
+            .spacing(m.gap(2.))
             .child(PopupTitle::new(String::from("Configurações")))
             .child(PopupContent::new().child(toggle_row(
+                &m,
                 switch_id,
                 "Confirmar ao sobrescrever",
                 cfg.confirm_overwrite,
                 flip(|c| &mut c.confirm_overwrite),
             )))
             .child(PopupContent::new().child(toggle_row(
+                &m,
                 switch_id,
                 "Exibir faixa de thumbnails",
                 cfg.show_filmstrip,
                 flip(|c| &mut c.show_filmstrip),
             )))
             .child(PopupContent::new().child(toggle_row(
+                &m,
                 switch_id,
                 "Reabrir última pasta ao iniciar",
                 cfg.open_last_on_startup,
                 flip(|c| &mut c.open_last_on_startup),
             )))
             .child(PopupContent::new().child(weak("Varredura (pastas grandes):")))
-            .child(
-                PopupContent::new().child(toggle_row(
-                    switch_id,
-                    "Respeitar .gitignore",
-                    cfg.respect_gitignore,
-                    ({
-                        let services = services.clone();
-                        move |_| set_scan_opt(&services, Some(!cfg.respect_gitignore), None)
-                    })
-                    .into(),
-                )),
-            )
-            .child(
-                PopupContent::new().child(toggle_row(
-                    switch_id,
-                    "Pular pastas/arquivos ocultos",
-                    cfg.skip_hidden,
-                    ({
-                        let services = services.clone();
-                        move |_| set_scan_opt(&services, None, Some(!cfg.skip_hidden))
-                    })
-                    .into(),
-                )),
-            )
             .child(PopupContent::new().child(toggle_row(
+                &m,
+                switch_id,
+                "Respeitar .gitignore",
+                cfg.respect_gitignore,
+                flip_rescan(&services, |c| &mut c.respect_gitignore),
+            )))
+            .child(PopupContent::new().child(toggle_row(
+                &m,
+                switch_id,
+                "Pular pastas/arquivos ocultos",
+                cfg.skip_hidden,
+                flip_rescan(&services, |c| &mut c.skip_hidden),
+            )))
+            .child(PopupContent::new().child(toggle_row(
+                &m,
                 switch_id,
                 "Exibir pastas ocultas na árvore",
                 cfg.show_hidden_folders,
                 flip(|c| &mut c.show_hidden_folders),
             )))
-            .child(PopupContent::new().child(jpeg_quality_row(cfg.jpeg_quality)))
-            .child(PopupContent::new().child(prefetch_row(cfg.prefetch_max_mb)))
-            .child(PopupContent::new().child(theme_row(theme_state, cfg.theme.clone())))
+            .child(PopupContent::new().child(weak("Aparência")))
+            .child(PopupContent::new().child(theme_row(&m, theme_state, cfg.theme.clone())))
+            .child(PopupContent::new().child(ui_scale_row(&m, cfg.ui_scale)))
+            .child(PopupContent::new().child(weak("Imagens")))
+            .child(PopupContent::new().child(jpeg_quality_row(&m, cfg.jpeg_quality)))
+            .child(PopupContent::new().child(prefetch_row(&m, cfg.prefetch_max_mb)))
+            .child(PopupContent::new().child(weak("Painéis")))
+            .child(PopupContent::new().child(toggle_row(
+                &m,
+                switch_id,
+                "Mostrar navegador (Ctrl+1)",
+                !cfg.hide_browser,
+                flip(|c| &mut c.hide_browser).invert(),
+            )))
+            .child(PopupContent::new().child(toggle_row(
+                &m,
+                switch_id,
+                "Mostrar galeria (Ctrl+2)",
+                !cfg.hide_gallery,
+                flip(|c| &mut c.hide_gallery).invert(),
+            )))
+            .child(weak("Varredura (pastas grandes):"))
             .child(
                 PopupContent::new()
                     .child(weak(&format!("{} pasta(s) fixada(s)", cfg.favorites.len()))),
@@ -171,45 +188,151 @@ impl Component for SettingsDialog {
 }
 
 /// Inverte um booleano das preferências e persiste.
-fn flip(f: fn(&mut AppConfig) -> &mut bool) -> ToggleHandler {
-    (move |_| {
-        set(|c| {
-            let slot = f(c);
-            *slot = !*slot;
+///
+/// [`Toggle::invert`] devolve o oposto sem tocar no config: usado nos toggles
+/// de "mostrar painel", em que o switch ligado é `!hide_*`.
+fn flip(f: fn(&mut AppConfig) -> &mut bool) -> Toggle {
+    Toggle {
+        inner: f,
+        invert: false,
+        rescan: None,
+    }
+}
+
+/// Toggle que também revarre a pasta atual depois de mudar.
+///
+/// Mudar `.gitignore` ou "ocultos" só tem efeito no próximo scan, então o
+/// handler não pode ser o `flip` simples: precisa revarre preservando a foto
+/// selecionada.
+fn flip_rescan(services: &Services, f: fn(&mut AppConfig) -> &mut bool) -> Toggle {
+    Toggle {
+        inner: f,
+        invert: false,
+        rescan: Some(services.clone()),
+    }
+}
+
+/// Um toggle de `AppConfig` com a polaridade escolhida.
+struct Toggle {
+    inner: fn(&mut AppConfig) -> &mut bool,
+    invert: bool,
+    /// Quando `Some`, revarre a pasta atual depois de gravar.
+    rescan: Option<Services>,
+}
+
+impl Toggle {
+    /// Devolve a mesma toggle com a polaridade invertida.
+    #[must_use]
+    fn invert(mut self) -> Self {
+        self.invert = !self.invert;
+        self
+    }
+
+    /// Handler pronto para o `Switch`.
+    ///
+    /// Inverter e depois negar dá o valor oposto, que é o que "Mostrar painel"
+    /// precisa: o switch é ligado quando `hide_*` é falso.
+    #[must_use]
+    fn into_handler(self) -> ToggleHandler {
+        let Toggle {
+            inner,
+            invert,
+            rescan,
+        } = self;
+        (move |_| {
+            set(|c| {
+                let slot = inner(c);
+                *slot = !(*slot) ^ invert;
+            });
+            if let Some(services) = &rescan {
+                rescan_current(services);
+            }
         })
-    })
-    .into()
+        .into()
+    }
 }
 
 /// Linha com `Switch` e rótulo. O id de acessibilidade vem de fora, para não
 /// chamar hook dentro de um `.maybe(...)`.
 fn toggle_row(
+    m: &ui::Metrics,
     a11y_id: AccessibilityId,
     text: &'static str,
     value: bool,
-    on_toggle: ToggleHandler,
+    on_toggle: Toggle,
 ) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(10.)
+        .spacing(m.gap(2.5))
         .child(
             Switch::new()
                 .key(a11y_id)
                 .toggled(value)
-                .on_toggle(on_toggle),
+                .on_toggle(on_toggle.into_handler()),
         )
-        .child(label().text(text))
+        .child(ui::text(
+            m,
+            ui::Role::Body,
+            Color::from_rgb(20, 20, 22),
+            text,
+        ))
 }
 
-/// Slider da qualidade JPEG (50..=100).
-fn jpeg_quality_row(value: u8) -> impl IntoElement {
+/// Escala tipográfica: slider + valor + passo de teclado.
+///
+/// Fica no modal de configurações porque é uma preferência de leitura, não
+/// um estado de visualização: quem troca uma vez quer que valha sempre.
+fn ui_scale_row(m: &ui::Metrics, value: f32) -> impl IntoElement {
+    let pct = (value * 100.0).round() as u32;
+    // `f64` de ponta a ponta: o `Slider` entrega `f64` e converte `f32` no meio
+    // só criaria erro de tipo onde não há erro de conta.
+    let min = f64::from(UI_SCALE_MIN);
+    let span = f64::from(UI_SCALE_MAX - UI_SCALE_MIN);
     rect()
         .width(Size::fill())
         .vertical()
         .spacing(2.)
-        .child(format!("Qualidade JPEG: {value}"))
+        .child(ui::text(
+            m,
+            ui::Role::Body,
+            Color::from_rgb(20, 20, 22),
+            format!("Tamanho do texto: {pct}%"),
+        ))
+        .child(
+            Slider::new(move |v: f64| {
+                set(|c| {
+                    c.ui_scale = crate::config::sanitize_ui_scale((min + v / 100.0 * span) as f32);
+                });
+            })
+            .value((f64::from(value) - min) / span * 100.0)
+            .scroll_enabled(false),
+        )
+        .child(ui::text(
+            m,
+            ui::Role::Small,
+            Color::from_argb(150, 90, 90, 96),
+            format!(
+                "Atalhos: Ctrl+= aumenta, Ctrl+- diminui ({}%–{}%)",
+                (UI_SCALE_MIN * 100.0) as u32,
+                (UI_SCALE_MAX * 100.0) as u32
+            ),
+        ))
+}
+
+/// Slider da qualidade JPEG (50..=100).
+fn jpeg_quality_row(m: &ui::Metrics, value: u8) -> impl IntoElement {
+    rect()
+        .width(Size::fill())
+        .vertical()
+        .spacing(2.)
+        .child(ui::text(
+            m,
+            ui::Role::Body,
+            Color::from_rgb(20, 20, 22),
+            format!("Qualidade JPEG: {value}"),
+        ))
         .child(
             Slider::new(move |v: f64| {
                 set(|c| c.jpeg_quality = (v as u8).clamp(1, 100));
@@ -220,13 +343,18 @@ fn jpeg_quality_row(value: u8) -> impl IntoElement {
 }
 
 /// Slider do teto de prefetch em MB (0..=256).
-fn prefetch_row(value: u64) -> impl IntoElement {
+fn prefetch_row(m: &ui::Metrics, value: u64) -> impl IntoElement {
     let mb = value.min(256);
     rect()
         .width(Size::fill())
         .vertical()
         .spacing(2.)
-        .child(format!("Prefetch até (MB, 0 = off): {mb}"))
+        .child(ui::text(
+            m,
+            ui::Role::Body,
+            Color::from_rgb(20, 20, 22),
+            format!("Prefetch até (MB, 0 = off): {mb}"),
+        ))
         .child(
             Slider::new(move |v: f64| {
                 set(|c| c.prefetch_max_mb = (v.max(0.0) as u64).min(1024));
@@ -244,17 +372,11 @@ fn set(f: impl FnOnce(&mut AppConfig)) {
     });
 }
 
-/// Troca uma opção de varredura e revarre preservando a foto atual.
-fn set_scan_opt(services: &Services, gitignore: Option<bool>, hidden: Option<bool>) {
-    state::update(AppChannel::Config, |st| {
-        if let Some(v) = gitignore {
-            st.config.respect_gitignore = v;
-        }
-        if let Some(v) = hidden {
-            st.config.skip_hidden = v;
-        }
-        st.config.save().ok();
-    });
+/// Revarre a pasta atual preservando a foto selecionada.
+///
+/// As opções de varredura só entram em vigor no próximo scan, então mudar
+/// `.gitignore` sem isto só surtiria efeito na próxima vez que o app abrisse.
+fn rescan_current(services: &Services) {
     state::update(AppChannel::Photos, |st| {
         let Some(dir) = st.current_dir.clone() else {
             return;
@@ -265,13 +387,22 @@ fn set_scan_opt(services: &Services, gitignore: Option<bool>, hidden: Option<boo
 }
 
 /// Dropdown de tema (aplica na hora).
-fn theme_row(theme_state: State<freya::components::Theme>, current: String) -> impl IntoElement {
+fn theme_row(
+    m: &ui::Metrics,
+    theme_state: State<freya::components::Theme>,
+    current: String,
+) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(10.)
-        .child(label().text("Tema:"))
+        .spacing(m.gap(2.5))
+        .child(ui::text(
+            m,
+            ui::Role::Body,
+            Color::from_rgb(20, 20, 22),
+            "Tema:",
+        ))
         .child(Select::new().selected_item(current.as_str()).children(
             crate::theme::THEMES.iter().map(|name| {
                 let name: &str = name;
@@ -297,7 +428,7 @@ fn theme_row(theme_state: State<freya::components::Theme>, current: String) -> i
 /// Texto secundário dentro dos popups.
 fn weak(text: &str) -> impl IntoElement {
     label()
-        .font_size(13.0)
-        .color(Color::from_argb(118, 110, 110, 110))
+        .font_size(11.5)
+        .color(Color::from_argb(150, 90, 90, 96))
         .text(text.to_owned())
 }

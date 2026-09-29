@@ -2,11 +2,26 @@
 //!
 //! Organização: a raiz do app vive em [`app`]; o pipeline de imagem em
 //! [`image_store`] e [`thumbs`]; o domínio puro (sem GUI) em [`config`],
-//! [`editor`], [`exif`] e [`fs_browser`]. O visual e os temas ficam em
-//! [`theme`] e [`icons`].
+//! [`editor`], [`exif`] e [`fs_browser`]. O visual fica em [`theme`],
+//! [`ui`] e [`icons`].
 //!
 //! Tudo o que não depende de janela é testável sem abrir a UI: ver
 //! `tests/pipeline.rs`.
+//!
+//! ## Roteiro para uma porta de volta ao egui
+//!
+//! A divisão em módulos já é a fronteira de portabilidade:
+//!
+//! | Camada | Módulos | Qué knobs no egui |
+//! |---|---|---|
+//! | Domínio (não muda) | `config`, `editor`, `exif`, `fs_browser` | — |
+//! | Transições de estado | `app/state.rs` (só `AppState`, sem freya) | — |
+//! | Serviços assíncronos | `image_store`, `thumbs`, `app/services.rs` | `ImageHandle` volta a ser `egui::TextureHandle` |
+//! | Só Freya | `app/*.rs` (menos `state.rs`), `theme.rs`, `ui.rs`, `icons.rs` | reescrever a árvore de elementos |
+//!
+//! Regra prática: **nenhuma decisão de produto pode morar em `ui.rs` ou em um
+//! componente**. Ela vai para `config.rs` (com teste) ou `state.rs` (função
+//! pura). Assim a troca de toolkit não leva decisão junto.
 
 pub mod app;
 pub mod config;
@@ -18,3 +33,4 @@ pub mod image_store;
 pub mod prelude;
 pub mod theme;
 pub mod thumbs;
+pub mod ui;

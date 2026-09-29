@@ -46,6 +46,18 @@ pub struct AppConfig {
     /// Lado do thumbnail da galeria em px (48..=192).
     #[serde(default = "default_thumb_size")]
     pub thumb_size: f32,
+    /// Escala global da tipografia (0.75..=1.40; 1.0 = padrão).
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
+    /// Recolhe o navegador lateral (Ctrl+1).
+    #[serde(default)]
+    pub hide_browser: bool,
+    /// Recolhe a galeria inferior (Ctrl+2).
+    #[serde(default)]
+    pub hide_gallery: bool,
+    /// Contorno de foco sempre visível nos botões.
+    #[serde(default)]
+    pub always_focus_ring: bool,
 }
 
 fn default_true() -> bool {
@@ -68,6 +80,10 @@ fn default_thumb_size() -> f32 {
     88.0
 }
 
+fn default_ui_scale() -> f32 {
+    1.0
+}
+
 /// Reexport dos temas visuais (implementados em `crate::theme`).
 #[allow(unused_imports)]
 pub use crate::theme::THEMES;
@@ -87,7 +103,31 @@ impl Default for AppConfig {
             show_hidden_folders: false,
             theme: String::from("slate"),
             thumb_size: 88.0,
+            ui_scale: 1.0,
+            hide_browser: false,
+            hide_gallery: false,
+            always_focus_ring: false,
         }
+    }
+}
+
+/// Menor escala tipográfica aceita (evita texto ilegível).
+pub const UI_SCALE_MIN: f32 = 0.75;
+/// Maior escala tipográfica aceita (evita estourar a barra).
+pub const UI_SCALE_MAX: f32 = 1.40;
+/// Passo do ajuste de escala (tecla/slider).
+pub const UI_SCALE_STEP: f32 = 0.05;
+
+/// Traz uma escala para a faixa válida, substituindo NaN pelo padrão.
+///
+/// Feito como função pura e pública para ser testável e para o egui reusar
+/// exatamente a mesma regra.
+#[must_use]
+pub fn sanitize_ui_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX)
+    } else {
+        1.0
     }
 }
 
@@ -115,6 +155,7 @@ impl AppConfig {
         cfg.jpeg_quality = cfg.jpeg_quality.clamp(1, 100);
         cfg.prefetch_max_mb = cfg.prefetch_max_mb.min(1024);
         cfg.thumb_size = cfg.thumb_size.clamp(48.0, 192.0);
+        cfg.ui_scale = sanitize_ui_scale(cfg.ui_scale);
         // Remove favoritas que não existem mais.
         cfg.favorites.retain(|p| p.is_dir());
         Some(cfg)
@@ -156,6 +197,27 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_scale_is_clamped_and_nan_safe() {
+        assert_eq!(sanitize_ui_scale(0.1), UI_SCALE_MIN);
+        assert_eq!(sanitize_ui_scale(9.0), UI_SCALE_MAX);
+        assert_eq!(sanitize_ui_scale(f32::NAN), 1.0);
+        assert_eq!(sanitize_ui_scale(1.15), 1.15);
+    }
+
+    #[test]
+    fn old_config_without_new_keys_loads_with_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        // Config gravado antes de ui_scale/hide_* existirem.
+        std::fs::write(&path, r#"{"jpeg_quality":80,"theme":"frost"}"#).expect("write");
+        let cfg = AppConfig::load_from(&path).expect("load");
+        assert_eq!(cfg.ui_scale, 1.0);
+        assert!(!cfg.hide_browser);
+        assert!(!cfg.hide_gallery);
+        assert_eq!(cfg.jpeg_quality, 80);
+    }
 
     #[test]
     fn roundtrip_preserves_values() {

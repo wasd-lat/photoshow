@@ -65,100 +65,109 @@ pub struct Palette {
     pub disabled: Rgb,
 }
 
-/// Slate: padrão, azul-acinzentado escuro.
+// --- Paletas ---
+//
+// Todos os quatro temas são neutros e de baixo contraste: a hierarquia vem de
+// borda de 1px e de espaço em branco, não de sombra nem de cor saturada. O
+// acento é quase preto no claro e quase branco no escuro, como nos apps
+// atuais da OpenAI.
+//
+// Nomes preservados do egui-elegance para não invalidar configs já gravados.
+
+/// Slate: padrão, neutro escuro levemente azulado.
 pub const SLATE: Palette = Palette {
-    primary: Rgb(10, 132, 255),
-    secondary: Rgb(120, 170, 235),
-    tertiary: Rgb(40, 96, 170),
-    background: Rgb(28, 30, 34),
-    surface_primary: Rgb(56, 60, 68),
-    surface_secondary: Rgb(68, 73, 82),
-    surface_tertiary: Rgb(44, 47, 53),
-    surface_inverse: Rgb(220, 224, 230),
-    surface_inverse_secondary: Rgb(200, 205, 212),
-    surface_inverse_tertiary: Rgb(180, 186, 194),
-    border: Rgb(74, 79, 88),
-    border_focus: Rgb(10, 132, 255),
-    text_primary: Rgb(236, 239, 243),
-    text_secondary: Rgb(160, 166, 176),
-    text_placeholder: Rgb(120, 126, 136),
-    text_inverse: Rgb(20, 22, 26),
-    text_highlight: Rgb(10, 132, 255),
-    focus: Rgb(60, 132, 255),
-    active: Rgb(90, 96, 106),
-    disabled: Rgb(90, 90, 90),
+    primary: Rgb(247, 247, 248),
+    secondary: Rgb(190, 192, 196),
+    tertiary: Rgb(120, 122, 128),
+    background: Rgb(20, 20, 21),
+    surface_primary: Rgb(37, 37, 39),
+    surface_secondary: Rgb(45, 45, 48),
+    surface_tertiary: Rgb(28, 28, 30),
+    surface_inverse: Rgb(13, 13, 14),
+    surface_inverse_secondary: Rgb(40, 40, 42),
+    surface_inverse_tertiary: Rgb(64, 64, 68),
+    border: Rgb(54, 54, 58),
+    border_focus: Rgb(247, 247, 248),
+    text_primary: Rgb(242, 242, 243),
+    text_secondary: Rgb(158, 158, 164),
+    text_placeholder: Rgb(150, 150, 156),
+    text_inverse: Rgb(20, 20, 21),
+    text_highlight: Rgb(247, 247, 248),
+    focus: Rgb(120, 120, 126),
+    active: Rgb(58, 58, 62),
+    disabled: Rgb(78, 78, 82),
 };
 
-/// Charcoal: neutro quase preto, sem viés azul.
+/// Charcoal: neutro puro, sem viés de cor.
 pub const CHARCOAL: Palette = Palette {
-    primary: Rgb(214, 214, 214),
-    secondary: Rgb(150, 150, 150),
-    tertiary: Rgb(96, 96, 96),
-    background: Rgb(24, 24, 24),
-    surface_primary: Rgb(48, 48, 48),
-    surface_secondary: Rgb(58, 58, 58),
-    surface_tertiary: Rgb(38, 38, 38),
-    surface_inverse: Rgb(228, 228, 228),
-    surface_inverse_secondary: Rgb(208, 208, 208),
-    surface_inverse_tertiary: Rgb(188, 188, 188),
-    border: Rgb(66, 66, 66),
-    border_focus: Rgb(214, 214, 214),
-    text_primary: Rgb(240, 240, 240),
-    text_secondary: Rgb(166, 166, 166),
-    text_placeholder: Rgb(126, 126, 126),
+    primary: Rgb(250, 250, 250),
+    secondary: Rgb(184, 184, 184),
+    tertiary: Rgb(112, 112, 112),
+    background: Rgb(18, 18, 18),
+    surface_primary: Rgb(35, 35, 35),
+    surface_secondary: Rgb(44, 44, 44),
+    surface_tertiary: Rgb(26, 26, 26),
+    surface_inverse: Rgb(12, 12, 12),
+    surface_inverse_secondary: Rgb(38, 38, 38),
+    surface_inverse_tertiary: Rgb(62, 62, 62),
+    border: Rgb(52, 52, 52),
+    border_focus: Rgb(250, 250, 250),
+    text_primary: Rgb(245, 245, 245),
+    text_secondary: Rgb(160, 160, 160),
+    text_placeholder: Rgb(150, 150, 156),
     text_inverse: Rgb(18, 18, 18),
-    text_highlight: Rgb(214, 214, 214),
-    focus: Rgb(128, 128, 128),
-    active: Rgb(86, 86, 86),
-    disabled: Rgb(88, 88, 88),
+    text_highlight: Rgb(250, 250, 250),
+    focus: Rgb(118, 118, 118),
+    active: Rgb(56, 56, 56),
+    disabled: Rgb(76, 76, 76),
 };
 
-/// Frost: claro, levemente azulado.
+/// Frost: claro, quase branco.
 pub const FROST: Palette = Palette {
-    primary: Rgb(20, 110, 210),
-    secondary: Rgb(150, 185, 230),
-    tertiary: Rgb(30, 70, 140),
-    background: Rgb(245, 248, 252),
-    surface_primary: Rgb(228, 234, 242),
-    surface_secondary: Rgb(238, 242, 248),
-    surface_tertiary: Rgb(250, 251, 253),
-    surface_inverse: Rgb(52, 58, 68),
-    surface_inverse_secondary: Rgb(72, 78, 88),
-    surface_inverse_tertiary: Rgb(96, 102, 112),
-    border: Rgb(206, 214, 226),
-    border_focus: Rgb(20, 110, 210),
-    text_primary: Rgb(22, 28, 38),
-    text_secondary: Rgb(88, 98, 112),
-    text_placeholder: Rgb(140, 150, 164),
-    text_inverse: Rgb(250, 251, 253),
-    text_highlight: Rgb(20, 110, 210),
-    focus: Rgb(135, 175, 230),
-    active: Rgb(214, 222, 234),
-    disabled: Rgb(206, 214, 226),
+    primary: Rgb(13, 13, 13),
+    secondary: Rgb(120, 120, 124),
+    tertiary: Rgb(64, 64, 68),
+    background: Rgb(252, 252, 253),
+    surface_primary: Rgb(243, 243, 245),
+    surface_secondary: Rgb(235, 235, 238),
+    surface_tertiary: Rgb(250, 250, 251),
+    surface_inverse: Rgb(23, 23, 24),
+    surface_inverse_secondary: Rgb(56, 56, 58),
+    surface_inverse_tertiary: Rgb(88, 88, 92),
+    border: Rgb(228, 228, 231),
+    border_focus: Rgb(13, 13, 13),
+    text_primary: Rgb(16, 16, 18),
+    text_secondary: Rgb(104, 104, 110),
+    text_placeholder: Rgb(104, 104, 110),
+    text_inverse: Rgb(252, 252, 253),
+    text_highlight: Rgb(13, 13, 13),
+    focus: Rgb(150, 150, 154),
+    active: Rgb(226, 226, 230),
+    disabled: Rgb(196, 196, 200),
 };
 
-/// Paper: claro, quente (creme).
+/// Paper: claro, levemente quente.
 pub const PAPER: Palette = Palette {
-    primary: Rgb(180, 110, 30),
-    secondary: Rgb(226, 190, 150),
-    tertiary: Rgb(140, 80, 20),
-    background: Rgb(250, 247, 241),
-    surface_primary: Rgb(238, 232, 222),
-    surface_secondary: Rgb(245, 240, 232),
-    surface_tertiary: Rgb(252, 250, 246),
-    surface_inverse: Rgb(58, 50, 42),
-    surface_inverse_secondary: Rgb(80, 70, 60),
-    surface_inverse_tertiary: Rgb(104, 94, 82),
-    border: Rgb(220, 212, 200),
-    border_focus: Rgb(180, 110, 30),
-    text_primary: Rgb(38, 32, 26),
-    text_secondary: Rgb(108, 96, 82),
-    text_placeholder: Rgb(160, 148, 132),
-    text_inverse: Rgb(252, 250, 246),
-    text_highlight: Rgb(180, 110, 30),
-    focus: Rgb(214, 178, 130),
-    active: Rgb(230, 222, 210),
-    disabled: Rgb(220, 212, 200),
+    primary: Rgb(26, 24, 22),
+    secondary: Rgb(126, 122, 116),
+    tertiary: Rgb(70, 66, 62),
+    background: Rgb(251, 250, 248),
+    surface_primary: Rgb(243, 241, 238),
+    surface_secondary: Rgb(234, 231, 227),
+    surface_tertiary: Rgb(249, 248, 245),
+    surface_inverse: Rgb(26, 24, 21),
+    surface_inverse_secondary: Rgb(58, 55, 50),
+    surface_inverse_tertiary: Rgb(90, 86, 80),
+    border: Rgb(229, 226, 221),
+    border_focus: Rgb(26, 24, 22),
+    text_primary: Rgb(24, 22, 20),
+    text_secondary: Rgb(108, 104, 98),
+    text_placeholder: Rgb(106, 102, 96),
+    text_inverse: Rgb(251, 250, 248),
+    text_highlight: Rgb(26, 24, 22),
+    focus: Rgb(154, 150, 144),
+    active: Rgb(228, 225, 220),
+    disabled: Rgb(198, 195, 190),
 };
 
 /// Paleta pelo nome salvo no config; desconhecido cai em `slate`.
@@ -336,6 +345,58 @@ mod tests {
             assert!(
                 ratio >= 3.0,
                 "{name}: destaque/fundo = {ratio:.2} (mín 3.0)"
+            );
+        }
+    }
+
+    #[test]
+    fn placeholder_text_stays_readable() {
+        // Placeholder é texto de verdade (caminho, "varrendo…", dica de
+        // erro), então passa por WCAG AA igual ao secundário. Num design
+        // minimalista ele é o que menos pode sumir: é o que explica o que a
+        // tela vazia está esperando.
+        for (name, p) in [
+            ("slate", SLATE),
+            ("charcoal", CHARCOAL),
+            ("frost", FROST),
+            ("paper", PAPER),
+        ] {
+            let ratio = contrast(p.text_placeholder, p.background);
+            assert!(
+                ratio >= 4.5,
+                "{name}: placeholder/fundo = {ratio:.2} (mín 4.5)"
+            );
+        }
+    }
+
+    #[test]
+    fn borders_are_visible_against_the_background() {
+        // Borda de 1px é o que dá a hierarquia no design minimalista: se ela
+        // some, a interface fica crua sem nenhum outro recurso.
+        for (name, p) in [
+            ("slate", SLATE),
+            ("charcoal", CHARCOAL),
+            ("frost", FROST),
+            ("paper", PAPER),
+        ] {
+            let ratio = contrast(p.border, p.background);
+            assert!(ratio >= 1.15, "{name}: borda/fundo = {ratio:.2} (mín 1.15)");
+        }
+    }
+
+    #[test]
+    fn accent_text_is_readable_on_the_accent_fill() {
+        // Botão primário: fundo = primary, texto = text_inverse.
+        for (name, p) in [
+            ("slate", SLATE),
+            ("charcoal", CHARCOAL),
+            ("frost", FROST),
+            ("paper", PAPER),
+        ] {
+            let ratio = contrast(p.text_inverse, p.primary);
+            assert!(
+                ratio >= 4.5,
+                "{name}: texto/botão primário = {ratio:.2} (mín 4.5)"
             );
         }
     }

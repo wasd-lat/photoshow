@@ -5,6 +5,7 @@ use freya::components::{Button, ContextMenu, Menu, MenuItem};
 use crate::icons;
 use crate::image_store::LoadState;
 use crate::prelude::*;
+use crate::ui;
 
 use super::crop::{self, DragKind2};
 use super::services::{CropCommand, Services};
@@ -27,6 +28,7 @@ impl Component for Viewer {
         let services = use_consume::<Services>();
         let maximized = channel(AppChannel::Viewer).read().maximized;
         let load = services.load.read().clone();
+        let m = ui::Metrics::new(channel(AppChannel::Config).read().config.ui_scale);
 
         // Guarda o último erro reportado, para não repetir a escrita (e
         // portanto o re-render) a cada frame.
@@ -73,13 +75,13 @@ impl Component for Viewer {
         }
 
         let body: Element = match &load {
-            LoadState::Empty => placeholder(
-                "Nenhuma foto — abra uma pasta ou fixe uma favorita. (F11 = fullscreen)",
-            ),
+            LoadState::Empty => {
+                placeholder(&m, "Nenhuma foto — abra uma pasta ou fixe uma favorita.")
+            }
             LoadState::Loading => rect()
                 .expanded()
                 .center()
-                .child(dim_label("carregando…"))
+                .child(dim_label(&m, "carregando…"))
                 .into_element(),
             LoadState::Failed(e) => {
                 // A mensagem também vai para a status bar; escrevemos no
@@ -88,7 +90,7 @@ impl Component for Viewer {
                     last_error.set(e.clone());
                     set_error(e.clone());
                 }
-                failed_card()
+                failed_card(&m)
             }
             LoadState::Loaded { image: handle, .. } => {
                 let dims = load.display_px();
@@ -105,7 +107,10 @@ impl Component for Viewer {
                     let anchor = cursor - center;
                     state::update(AppChannel::Viewer, |st| {
                         st.zoom = (st.zoom * factor).clamp(state::ZOOM_MIN, state::ZOOM_MAX);
-                        st.offset = anchor + (st.offset - anchor) * factor;
+                        let next = anchor + (st.offset - anchor) * factor;
+                        // Voltar a 1.0 tem que recentralizar, senão a foto
+                        // fica deslocada depois de um zoom-out.
+                        st.offset = clamp_pan(*area.read(), dims, st.zoom, next);
                     });
                 };
 
@@ -113,10 +118,11 @@ impl Component for Viewer {
                     let crop_rect = crop_rect;
                     let mut drag = drag;
                     move |e: Event<PointerEventData>| {
-                        let p = to_point(&e.element_location());
-                        let draw = compute_draw(*area.read(), dims, zoom, offset);
-                        let double = EventsCombos::<()>::pressed(e.global_location())
-                            == PressEventType::Double;
+                        // Tudo em coordenadas de tela: é assim que `draw`,
+                        // `area` e o crop são calculados.
+                        let at = e.global_location();
+                        let p = to_local_point(e.data(), *area.read());
+                        let double = EventsCombos::<()>::pressed(at) == PressEventType::Double;
                         if double && !crop_mode {
                             state::update(AppChannel::Viewer, |st| {
                                 st.zoom = 1.0;
@@ -126,10 +132,9 @@ impl Component for Viewer {
                         }
                         if crop_mode {
                             start_crop(crop_rect, drag, p);
-                        } else {
-                            drag.set(Some(crop::DragKind::Pan(e.element_location())));
+                        } else if can_pan(*area.read(), dims, zoom) {
+                            drag.set(Some(crop::DragKind::Pan(at)));
                         }
-                        let _ = draw;
                     }
                 };
 
@@ -141,15 +146,19 @@ impl Component for Viewer {
                             return;
                         };
                         e.prevent_default();
-                        let p = to_point(&e.element_location());
-                        let draw = compute_draw(*area.read(), dims, zoom, offset);
+                        let at = e.global_location();
+                        let p = to_local_point(e.data(), *area.read());
                         match kind {
                             crop::DragKind::Pan(last) => {
-                                let delta = to_vector(&e.element_location()) - to_vector(&last);
-                                state::update(AppChannel::Viewer, |st| st.offset += delta);
-                                drag.set(Some(crop::DragKind::Pan(e.element_location())));
+                                let delta = to_vector(&at) - to_vector(&last);
+                                state::update(AppChannel::Viewer, |st| {
+                                    st.offset =
+                                        clamp_pan(*area.read(), dims, st.zoom, st.offset + delta);
+                                });
+                                drag.set(Some(crop::DragKind::Pan(at)));
                             }
                             crop::DragKind::Crop(inner) => {
+                                let draw = compute_draw(*area.read(), dims, zoom, offset);
                                 update_crop(crop_rect, inner, p, draw, ratio);
                             }
                         }
@@ -166,13 +175,23 @@ impl Component for Viewer {
                         image(handle.clone())
                             .width(Size::px(draw.width()))
                             .height(Size::px(draw.height()))
-                            .offset_x(draw.min_x() - area.read().min_x())
-                            .offset_y(draw.min_y() - area.read().min_y())
+                            // `draw` e `area` vêm do `on_sized`, ou seja, em
+                            // coordenadas **de tela**. `Position::Absolute`
+                            // interpreta `left/top` a partir do pai, então
+                            // passar a coordenada de tela aqui a somaria duas
+                            // vezes (uma via pai, outra via o próprio valor) e
+                            // jogaria a imagem para fora da janela. A diferença
+                            // entre as duas é o offset relativo correto.
+                            .position(
+                                Position::new_absolute()
+                                    .left(draw.min_x() - area.read().min_x())
+                                    .top(draw.min_y() - area.read().min_y()),
+                            )
                             .aspect_ratio(AspectRatio::None)
                             .sampling_mode(SamplingMode::Mitchell)
                             .a11y_alt("Foto exibida"),
                     )
-                    .child(crop_overlay(draw, crop_rect(), crop_mode))
+                    .child(crop_overlay(draw, crop_rect(), crop_mode, *area.read()))
                     .on_wheel(on_wheel)
                     .on_pointer_down(on_down)
                     .on_global_pointer_move(on_move)
@@ -200,7 +219,7 @@ impl Component for Viewer {
                 }
             })
             .child(body)
-            .maybe(maximized, |el| el.child(restore_button()))
+            .maybe(maximized, |el| el.child(restore_button(&m)))
     }
 }
 
@@ -219,9 +238,56 @@ fn wheel_factor(e: &Event<WheelEventData>) -> f32 {
     factor.clamp(0.2, 5.0)
 }
 
-/// Cursor global (f64) -> ponto de layout (f32).
-fn to_point(cursor: &CursorPoint) -> Point2D {
-    Point2D::new(cursor.x as f32, cursor.y as f32)
+/// Cursor **de tela** -> ponto relativo à área do viewer.
+///
+/// `draw`, `crop` e `area` vivem todos em coordenadas de tela (veem do
+/// `on_sized`), mas `element_location` de um evento é relativo ao elemento que
+/// tem o handler. Misturar os dois punha o retângulo de crop deslocado — de
+/// longe o suficiente para o corte cair fora da foto.
+fn to_local_point(e: &PointerEventData, area: ScreenRect) -> Point2D {
+    Point2D::new(
+        e.global_location().x as f32 - area.min_x(),
+        e.global_location().y as f32 - area.min_y(),
+    )
+}
+
+/// Há algo para arrastar neste zoom?
+///
+/// O `fit` garante que em zoom 1 a imagem **sempre** cabe na viewport, então
+/// um teste só de proporção nunca distinguiria "cabe" de "não cabe": é
+/// preciso olhar o zoom também. Antes disso, `can_pan` ignorava o zoom,
+/// devolvia `false` para toda foto e o pan nunca começava.
+#[must_use]
+pub fn can_pan(area: ScreenRect, dims: (u32, u32), zoom: f32) -> bool {
+    if area.width() <= 0.0 || area.height() <= 0.0 || dims.0 == 0 || dims.1 == 0 {
+        return false;
+    }
+    let draw = compute_draw(area, dims, zoom, Vector2D::new(0.0, 0.0));
+    draw.width() > area.width() + 0.5 || draw.height() > area.height() + 0.5
+}
+
+/// Desloca o pan para manter a imagem dentro da viewport.
+///
+/// Sem o clamp, arrastar até a borda solta a foto e ela some; com ele, a
+/// imagem para nas bordas e sempre sobra algo visível.
+#[must_use]
+pub fn clamp_pan(area: ScreenRect, dims: (u32, u32), zoom: f32, offset: Vector2D) -> Vector2D {
+    if !can_pan(area, dims, zoom) {
+        return Vector2D::new(0.0, 0.0);
+    }
+    let draw = compute_draw(area, dims, zoom, offset);
+    // Overflow horizontal e vertical, calculados separadamente: se a imagem
+    // é mais larga que a janela, o eixo curto não pode deslocar.
+    let mut out = Vector2D::new(0.0, 0.0);
+    let dx = (draw.width() - area.width()) / 2.0;
+    if dx > 0.0 {
+        out.x = offset.x.clamp(-dx, dx);
+    }
+    let dy = (draw.height() - area.height()) / 2.0;
+    if dy > 0.0 {
+        out.y = offset.y.clamp(-dy, dy);
+    }
+    out
 }
 
 /// Cursor global (f64) -> vetor de layout (f32).
@@ -295,13 +361,22 @@ fn update_crop(
 }
 
 /// Overlay do crop: escurece fora, borda e alças (posicionamento global).
-fn crop_overlay(draw: ScreenRect, crop: Option<ScreenRect>, crop_mode: bool) -> impl IntoElement {
+fn crop_overlay(
+    draw: ScreenRect,
+    crop: Option<ScreenRect>,
+    crop_mode: bool,
+    area: ScreenRect,
+) -> impl IntoElement {
     if !crop_mode {
         return rect().position(Position::new_global()).into_element();
     }
-    let Some(cr) = crop.map(|r| r.intersection(&draw).unwrap_or(draw)) else {
+    // O rect do crop é local (bate com o hit-test); o overlay é global.
+    let Some(cr) = crop.map(|r| crop_to_screen(r, area)) else {
         return rect().position(Position::new_global()).into_element();
     };
+    // Nunca desenha uma faixa "de dentro para fora": sem a conversão acima, o
+    // `intersection` aqui mascararia o retângulo fora de lugar.
+    let cr = cr.intersection(&draw).unwrap_or(draw);
 
     rect()
         .position(Position::new_global())
@@ -328,6 +403,21 @@ fn crop_overlay(draw: ScreenRect, crop: Option<ScreenRect>, crop_mode: bool) -> 
         .into_element()
 }
 
+/// Converte um rect **local ao viewer** (como o estado do crop guarda) para o
+/// rect **de tela** que o overlay desenha.
+///
+/// O crop é guardado em coordenadas locais para o hit-test casar com
+/// `element_location`; o overlay usa `Position::Global`, que é de tela. Sem
+/// esta conversão, o retângulo de seleção nasceria deslocado pelo canto da
+/// janela e as alças não acertariam o mouse.
+#[must_use]
+pub fn crop_to_screen(rect: ScreenRect, area: ScreenRect) -> ScreenRect {
+    ScreenRect::new(
+        Point2D::new(rect.min_x() + area.min_x(), rect.min_y() + area.min_y()),
+        Size2D::new(rect.width(), rect.height()),
+    )
+}
+
 /// Faixa escura do overlay (coordenadas globais).
 fn band(left: f32, top: f32, right: f32, bottom: f32) -> impl IntoElement {
     rect()
@@ -338,13 +428,14 @@ fn band(left: f32, top: f32, right: f32, bottom: f32) -> impl IntoElement {
 }
 
 /// Botão flutuante para sair do modo maximizado.
-fn restore_button() -> impl IntoElement {
+fn restore_button(m: &ui::Metrics) -> impl IntoElement {
     rect()
-        .position(Position::new_global().top(8.).right(8.))
+        .position(Position::new_global().top(m.gap(2.)).right(m.gap(2.)))
         .child(
             Button::new()
                 .filled()
-                .compact()
+                .corner_radius(m.radius())
+                .padding(ui::gaps(m, 1., 2.))
                 .on_press(|_| {
                     state::update(AppChannel::Viewer, state::toggle_maximize);
                 })
@@ -352,58 +443,67 @@ fn restore_button() -> impl IntoElement {
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(5.)
-                        .child(icons::icon("grid-2x2"))
-                        .child("Restaurar painéis"),
+                        .spacing(m.gap(1.5))
+                        .child(ui::svg(m, "grid-2x2"))
+                        .child(ui::text(m, ui::Role::Body, INVERSE, "Restaurar painéis")),
                 ),
         )
 }
 
 /// Mensagem central quando não há foto.
-fn placeholder(text: &'static str) -> Element {
+fn placeholder(m: &ui::Metrics, text: &'static str) -> Element {
     rect()
         .expanded()
         .center()
-        .child(label().color((220, 220, 220)).text(text))
+        .child(ui::text(m, ui::Role::Body, DIM_TEXT, text))
         .into_element()
 }
 
 /// Card neutro de falha (o detalhe vai para a barra de status).
-fn failed_card() -> Element {
+fn failed_card(m: &ui::Metrics) -> Element {
     rect()
         .expanded()
         .center()
         .child(
             rect()
                 .vertical()
-                .spacing(8.)
+                .spacing(m.gap(2.))
                 .cross_align(Alignment::Center)
-                .padding(20.)
-                .corner_radius(12.)
-                .background((32, 32, 36))
+                .padding(m.gap(5.))
+                .corner_radius(m.radius())
+                .background(Color::from_rgb(34, 34, 37))
+                .border(
+                    Border::new()
+                        .width(1.)
+                        .alignment(BorderAlignment::Inner)
+                        .fill(Color::from_argb(90, 128, 128, 136)),
+                )
                 .child(icons::icon_tinted(
                     "image-off",
-                    40.0,
+                    m.gap(10.),
                     Color::from_rgb(150, 150, 155),
                 ))
-                .child(
-                    label()
-                        .color((235, 235, 235))
-                        .text("Não foi possível abrir esta imagem"),
-                )
-                .child(dim_label("arquivo ilegível, incompleto ou corrompido"))
-                .child(dim_label("← → para continuar navegando")),
+                .child(ui::text(
+                    m,
+                    ui::Role::Body,
+                    INVERSE,
+                    "Não foi possível abrir esta imagem",
+                ))
+                .child(dim_label(m, "arquivo ilegível, incompleto ou corrompido"))
+                .child(dim_label(m, "← → para continuar navegando")),
         )
         .into_element()
 }
 
 /// Rótulo em cor secundária sobre fundo escuro.
-fn dim_label(text: &str) -> impl IntoElement {
-    label()
-        .font_size(13.0)
-        .color((160, 160, 165))
-        .text(text.to_owned())
+fn dim_label(m: &ui::Metrics, text: &str) -> impl IntoElement {
+    ui::text(m, ui::Role::Small, DIM_TEXT, text.to_owned())
 }
+
+/// Cor de texto padrão sobre o fundo escuro do visualizador.
+const INVERSE: Color = Color::from_rgb(235, 235, 238);
+/// Cor de texto secundária sobre o fundo escuro do visualizador.
+const DIM_TEXT: Color = Color::from_rgb(150, 150, 156);
 
 /// Linha divisória dentro do menu de contexto.
 fn menu_divider() -> impl IntoElement {
@@ -411,7 +511,7 @@ fn menu_divider() -> impl IntoElement {
         .width(Size::fill())
         .height(Size::px(1.))
         .padding(4.)
-        .background(Color::from_argb(30, 0, 0, 0))
+        .background(Color::from_argb(60, 128, 128, 136))
 }
 
 /// Item de menu com ícone.
@@ -509,6 +609,10 @@ pub fn context_menu() -> Menu {
 }
 
 /// Abre o menu de contexto da foto selecionada.
+///
+/// Usa `open_from_down`: o `ContextMenuViewer` rastreia a posição global do
+/// ponteiro, então o menu aparece onde o clique aconteceu. `ContextMenu::open`
+/// (sem down) usaria a última posição conhecida e abriria no canto da tela.
 pub fn open_context_menu() {
     ContextMenu::open_from_down(context_menu());
 }
@@ -582,5 +686,213 @@ mod tests {
             compute_draw(empty, (100, 100), 1.0, Vector2D::new(0., 0.)),
             empty
         );
+    }
+
+    /// Retângulo de viewport já deslocado, como o viewer mediria no `on_sized`.
+    fn stage_at(x: f32, y: f32, w: f32, h: f32) -> ScreenRect {
+        ScreenRect::new(Point2D::new(x, y), Size2D::new(w, h))
+    }
+
+    #[test]
+    fn pan_is_disabled_at_fit_zoom() {
+        // O fit garante que em zoom 1 tudo cabe: não há o que arrastar.
+        let area = stage_at(0., 0., 800., 600.);
+        for dims in [
+            (400, 300),
+            (4000, 300),
+            (400, 3000),
+            (4000, 4000),
+            (100, 9000),
+        ] {
+            assert!(!can_pan(area, dims, 1.0), "dims {dims:?}");
+        }
+    }
+
+    #[test]
+    fn pan_unlocks_as_soon_as_the_image_overflows() {
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (400, 300);
+        // 1.0 cabe; 1.2 já estoura a largura.
+        assert!(!can_pan(area, dims, 1.0));
+        assert!(can_pan(area, dims, 1.2));
+        assert!(can_pan(area, dims, 3.0));
+    }
+
+    #[test]
+    fn pan_unlocks_on_the_axis_that_overflows() {
+        // Foto alta e estreita (letterbox): o overflow é vertical.
+        let area = stage_at(0., 0., 800., 600.);
+        let tall = (300, 4000);
+        let zoom = 1.6;
+        let draw = compute_draw(area, tall, zoom, Vector2D::new(0., 0.));
+        assert!(draw.height() > area.height());
+        assert!(draw.width() <= area.width() + 0.5);
+        assert!(can_pan(area, tall, zoom));
+    }
+
+    #[test]
+    fn degenerate_area_never_pans() {
+        let empty = stage_at(0., 0., 0., 0.);
+        assert!(!can_pan(empty, (400, 300), 4.0));
+        assert!(!can_pan(stage_at(0., 0., 800., 600.), (0, 300), 4.0));
+    }
+
+    #[test]
+    fn clamp_stops_panning_at_the_edge() {
+        // No limite do pan, a imagem **cobre** a viewport: nenhuma faixa vazia
+        // aparece. Não dá para conter a imagem inteira (ela é maior), só para
+        // cobrir — e é isso que impede a foto de sumir.
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (4000, 3000);
+        let zoom = 4.0;
+        let far = Vector2D::new(9999., 9999.);
+        let clamped = clamp_pan(area, dims, zoom, far);
+        let draw = compute_draw(area, dims, zoom, clamped);
+
+        assert!(draw.min_x() <= area.min_x() + 0.5, "faixa vazia à esquerda");
+        assert!(draw.max_x() >= area.max_x() - 0.5, "faixa vazia à direita");
+        assert!(draw.min_y() <= area.min_y() + 0.5, "faixa vazia em cima");
+        assert!(draw.max_y() >= area.max_y() - 0.5, "faixa vazia embaixo");
+    }
+
+    #[test]
+    fn clamp_covers_the_viewport_on_both_sides() {
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (4000, 4000);
+        let zoom = 4.0;
+        for far in [
+            Vector2D::new(-9999., -9999.),
+            Vector2D::new(9999., -9999.),
+            Vector2D::new(-9999., 9999.),
+            Vector2D::new(9999., 9999.),
+        ] {
+            let clamped = clamp_pan(area, dims, zoom, far);
+            let draw = compute_draw(area, dims, zoom, clamped);
+            assert!(
+                draw.min_x() <= area.min_x() + 0.5
+                    && draw.max_x() >= area.max_x() - 0.5
+                    && draw.min_y() <= area.min_y() + 0.5
+                    && draw.max_y() >= area.max_y() - 0.5,
+                "cobertura falhou em {far:?}: {draw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn clamp_is_idempotent() {
+        // Aplicar o clamp de novo não move nada: já está no limite.
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (4000, 3000);
+        let once = clamp_pan(area, dims, 4.0, Vector2D::new(9999., -9999.));
+        let twice = clamp_pan(area, dims, 4.0, once);
+        assert!((once.x - twice.x).abs() < 0.01);
+        assert!((once.y - twice.y).abs() < 0.01);
+    }
+
+    #[test]
+    fn clamp_never_pulls_the_image_off_center() {
+        // Um offset pequeno demais (imagem quase cabendo) é zerado, para a
+        // foto não ficar pendurada num canto.
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (400, 300);
+        let tiny = Vector2D::new(2., 2.);
+        // Em zoom 1 não há pan: volta ao centro.
+        assert_eq!(clamp_pan(area, dims, 1.0, tiny), Vector2D::new(0., 0.));
+        // Em zoom alto, 2px é um offset válido.
+        assert_eq!(clamp_pan(area, dims, 4.0, tiny), tiny);
+    }
+
+    #[test]
+    fn clamp_recenters_at_fit_zoom() {
+        // Em zoom 1 a imagem fica centralizada: offset tem de ser zero.
+        let area = stage_at(0., 0., 800., 600.);
+        assert_eq!(
+            clamp_pan(area, (400, 300), 1.0, Vector2D::new(120., -80.)),
+            Vector2D::new(0., 0.)
+        );
+    }
+
+    #[test]
+    fn clamp_is_symmetric() {
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (4000, 3000);
+        let right = clamp_pan(area, dims, 4.0, Vector2D::new(5000., 0.));
+        let left = clamp_pan(area, dims, 4.0, Vector2D::new(-5000., 0.));
+        assert_eq!(right.x, -left.x);
+    }
+
+    #[test]
+    fn clamp_locks_the_axis_that_fits() {
+        // Imagem larga e baixa: pode deslizar em X, não em Y.
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (4000, 300);
+        let c = clamp_pan(area, dims, 2.0, Vector2D::new(500., 500.));
+        assert!(c.x.abs() > 0.0, "eixo X deveria liberar: {c:?}");
+        assert_eq!(c.y, 0.0, "eixo Y não deveria liberar");
+    }
+
+    #[test]
+    fn to_local_point_is_relative_to_the_viewer() {
+        // Regressão de crop: um cursor de tela precisa virar relativo à área,
+        // senão o retângulo nasce deslocado pela posição da janela.
+        let area = stage_at(435., 43., 800., 600.);
+        let ev = PointerEventData::Mouse(MouseEventData {
+            global_location: CursorPoint::new(535., 143.),
+            element_location: CursorPoint::new(100., 100.),
+            button: Some(MouseButton::Left),
+        });
+        let p = to_local_point(&ev, area);
+        assert!((p.x - 100.).abs() < 0.01);
+        assert!((p.y - 100.).abs() < 0.01);
+    }
+
+    #[test]
+    fn crop_rect_converts_between_local_and_screen() {
+        // Regressão de crop: o estado guarda o rect em coordenadas locais (para
+        // o hit-test casar com `element_location`), mas o overlay desenha em
+        // coordenadas de tela. Sem converter, a seleção nascia deslocada pelo
+        // canto da janela e as alças não acertavam o mouse.
+        let area = stage_at(435., 43., 800., 600.);
+        let local = ScreenRect::new(Point2D::new(100., 50.), Size2D::new(200., 150.));
+        let screen = crop_to_screen(local, area);
+        assert!((screen.min_x() - 535.).abs() < 0.01);
+        assert!((screen.min_y() - 93.).abs() < 0.01);
+        // O tamanho não muda na conversão.
+        assert!((screen.width() - 200.).abs() < 0.01);
+        assert!((screen.height() - 150.).abs() < 0.01);
+    }
+
+    #[test]
+    fn crop_screen_rect_falls_inside_the_draw_rect() {
+        // Fluxo completo do gesto: âncora e ponteiro locais -> seleção que
+        // cabe na área desenhada da foto.
+        let area = stage_at(0., 0., 800., 600.);
+        let dims = (400, 300);
+        let draw = compute_draw(area, dims, 1.0, Vector2D::new(0., 0.));
+        let anchor = Point2D::new(50., 50.);
+        let pointer = Point2D::new(400., 400.);
+        let sel = crate::app::crop::enforce_aspect(anchor, pointer, None).intersection(&draw);
+        let sel = sel.expect("seleção dentro da foto");
+        assert!(sel.min_x() >= draw.min_x() && sel.max_x() <= draw.max_x());
+        assert!(sel.min_y() >= draw.min_y() && sel.max_y() <= draw.max_y());
+    }
+
+    #[test]
+    fn crop_respects_the_requested_aspect_ratio() {
+        let anchor = Point2D::new(0., 0.);
+        let sel = crate::app::crop::enforce_aspect(anchor, Point2D::new(400., 100.), Some(1.0));
+        let ratio = sel.width() / sel.height();
+        assert!((ratio - 1.0).abs() < 0.01, "ratio {ratio}");
+    }
+
+    #[test]
+    fn crop_ignores_degenerate_drags() {
+        // Arrasto de tamanho zero não pode gerar divisão por zero.
+        let zero = crate::app::crop::enforce_aspect(
+            Point2D::new(10., 10.),
+            Point2D::new(10., 10.),
+            Some(1.0),
+        );
+        assert!(zero.width() >= 0.0 && zero.height() >= 0.0);
     }
 }

@@ -25,22 +25,71 @@ Todos os lançamentos notáveis deste projeto. Formato baseado em
     `State` reativo, sem polling de canal na thread de UI.
 - Documentação de uso e perfil do projeto atualizados para o novo stack.
 
-### Corrigido
-- Layout da barra superior: um espaçador com `Size::fill()` no meio da linha
-  comia todo o espaço restante e espremia o filtro de formato até o texto
-  quebrar em 8 linhas (barra de 164px). A barra agora usa dois grupos com
+### Adicionado
+- **Escala tipográfica** (75%–140%) no modal de configurações, com atalhos
+  `Ctrl+=` / `Ctrl+-`. Aparece no config em `ui_scale`; configs antigos sem a
+  chave continuam carregando.
+- **Recolher painéis**: botões na barra e atalhos `Ctrl+1` (navegador),
+  `Ctrl+2` (galeria) e `Ctrl+0` / "Restaurar layout". Persistido em
+  `hide_browser` / `hide_gallery`.
+- **Botões de recolher** na barra, com ícone e tooltip próprios.
+
+### Visual e leitura
+- **Visual minimalista neutro** (referência: apps atuais da OpenAI): neutros
+  de baixo contraste, um único acento, bordas de 1px no lugar de sombra,
+  tipografia miúda. As quatro paletas existentes (slate/charcoal/frost/paper)
+  foram retunadas sem mudar de nome, e o `text_placeholder` deixou de falhar
+  em WCAG AA (ele é texto de verdade: caminho, "varrendo…", dica de erro).
+- Novas paletas passam em contraste AA para placeholder e para texto do botão
+  primário, e a borda tem contraste mínimo testado — é ela que dá a
+  hierarquia quando não há sombra.
+- **Dropdown fora do fluxo** (`ui::Dropdown`): o `Menu` do Freya marca
+  `Layer::Overlay`, que é só ordem de pintura; no torin ele continua
+  empilhado e empurrava a interface para baixo ao abrir.
+- Um espaçador com `Size::fill()` no meio da barra comia todo o espaço
+  restante e espremia o filtro de formato até o texto quebrar em 8 linhas
+  (barra de 164px). A barra agora usa dois grupos com
   `Alignment::SpaceBetween`.
 - Áreas com `Size::fill()` no eixo principal empurravam o rodapé para fora da
   janela (dock) e sumiam com a lista de fotos (navegador). Ambos passaram a
   dividir a altura com `Content::flex()` + `Size::flex()`.
-- Zoom e pan do visualizador não alteravam a imagem: o elemento não era
-  dimensionado pelo retângulo calculado, então o Skia sempre desenhava o fit.
-- A lista de fotos mantinha o realce na seleção anterior: o `PartialEq` do
-  `VirtualScrollView` não enxerga estado capturado na closure, então a seleção
-  agora faz parte do `builder_data`.
+- Linhas da lista de fotos com altura fixa faziam nomes longos invadir a
+  linha de baixo; a altura agora deriva da tipografia.
+
+### Corrigido
+- **Menu Arquivo não clicável**: os itens iam como um `Menu` pronto e o
+  `Dropdown` embrulhava em outro, então o menu interno engolia o externo. O
+  `Dropdown` agora monta o `Menu` e recebe só os itens.
+- **Zoom e pan não faziam nada**: a imagem não era posicionada pela área
+  calculada, e o `Position::Absolute` somava a coordenada de tela uma segunda
+  vez (435 + 900 = 1335), jogando a foto para fora da janela.
+- **Pan não começava nunca**: `can_pan` ignorava o zoom, e como o `fit`
+  garante que em zoom 1 tudo cabe, a resposta era sempre "não".
+- **Pan soltava a foto**: arrastar até a borda levava a imagem para fora da
+  janela. Agora o offset é limitado às bordas.
+- **Crop nascia deslocado**: os handlers usam `element_location` (relativo),
+  mas `draw`/`area` vêm do `on_sized` (de tela). O rect do crop é guardado em
+  coordenadas locais e convertido para tela só na hora de desenhar.
+- **Rotação a partir do 2º clique**: `display_base_dims()` lia `display_img`,
+  que `apply_preview` sobrescreve com a imagem já transformada — a 2ª rotação
+  derivava. Agora a base fica guardada à parte, e o preview sempre parte da
+  imagem sem edição.
+- **`EditorStack::default()` entrava em pânico**: o `Default` derivado criava
+  `history` vazio e `state()` fazia `expect`.
+- Alvo do star de favorito tinha 14px (inclicável); agora tem 24px.
 - Miniaturas nunca apareciam: o `State` era escrito de dentro do próprio render
-  da galeria, o que não agenda o próximo frame. O drain virou um pulso do pump e
-  foi para o render da raiz.
+  da galeria, o que não agenda o próximo frame. O drain virou um pulso do pump.
+- Varredura e salvamento em background não redesenhavam a UI (a raiz não
+  assinava esses canais).
+- `ImageStore::poll` reconstruía o `ImageHandle` a cada tique do pump, subindo a
+  imagem para a GPU 60× por segundo e forçando repaint contínuo.
+- Hooks do Freya em `.maybe()`, handlers e funções auxiliares abortavam o
+  render no frame seguinte.
+
+### Desempenho
+- O pump acordava a cada 16ms mesmo sem trabalho, segurando ~0,35% de CPU com a
+  janela ociosa. Agora o tique é adaptativo: 16ms com decode/miniatura em voo,
+  125ms parado.
 - Varredura e salvamento concluídos em background não redesenhavam a UI (a raiz
   não assinava esses canais).
 - `ImageStore::poll` reconstruía o `ImageHandle` a cada tique do pump, subindo a

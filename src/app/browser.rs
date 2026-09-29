@@ -5,13 +5,13 @@ use freya::components::{Button, ScrollView, VirtualItem, VirtualScrollView};
 use freya::radio::Radio;
 
 use crate::fs_browser::PhotoPath;
-use crate::icons;
+use crate::ui;
 
 use super::services::Services;
 use super::state::{self, AppChannel, AppState, channel};
 
-/// Altura de cada linha da lista de fotos.
-const ROW: f32 = 24.0;
+/// Padding vertical de cada linha da lista de fotos.
+const ROW_PAD: f32 = 3.0;
 /// Proporção da altura do painel devote à árvore (o resto é a lista de fotos).
 const TREE_PERCENT: f32 = 34.0;
 
@@ -28,8 +28,12 @@ impl Component for Browser {
         let status = channel(AppChannel::Status);
 
         let snapshot = photos.read().clone();
+        let m = ui::Metrics::new(config.read().config.ui_scale);
         let favorites = config.read().config.favorites.clone();
         let scanning = status.read().scanning.is_some();
+        // A altura da linha deriva da tipografia: com fonte maior, uma altura
+        // fixa faria o texto vazar para a linha de baixo.
+        let row = row_height(&m);
 
         rect()
             .width(Size::fill())
@@ -45,29 +49,29 @@ impl Component for Browser {
                     .child(
                         rect()
                             .width(Size::fill())
-                            .padding(8.)
-                            .spacing(6.)
-                            .child(section_header("Favoritas"))
+                            .padding(ui::gaps(&m, 2., 2.))
+                            .spacing(m.gap(1.5))
+                            .child(ui::section(&m, "Favoritas"))
                             .maybe(favorites.is_empty(), |el| {
-                                el.child(weak("Nenhuma pasta fixada."))
+                                el.child(ui::faint(&m, "Nenhuma pasta fixada."))
                             })
                             .children(
                                 favorites
                                     .into_iter()
-                                    .map(|dir| favorite_row(dir, photos, config, services.clone())),
+                                    .map(|dir| favorite_row(&m, dir, photos, services.clone())),
                             ),
                     )
                     .child(
                         rect()
                             .width(Size::fill())
-                            .padding(8.)
-                            .spacing(6.)
-                            .child(section_header("Pasta atual"))
+                            .padding(ui::gaps(&m, 2., 2.))
+                            .spacing(m.gap(1.5))
+                            .child(ui::section(&m, "Pasta atual"))
                             .maybe(snapshot.tree.is_none(), |el| {
-                                el.child(weak("Nenhuma pasta aberta."))
+                                el.child(ui::faint(&m, "Nenhuma pasta aberta."))
                             })
                             .maybe_child(snapshot.tree.clone().map(|root| {
-                                current_folder(root, photos, config, services.clone())
+                                current_folder(&m, root, photos, config, services.clone())
                             })),
                     ),
             )
@@ -76,48 +80,38 @@ impl Component for Browser {
                     .width(Size::fill())
                     .height(Size::flex(100. - TREE_PERCENT))
                     .vertical()
-                    .padding(8.)
-                    .spacing(4.)
+                    .padding(ui::gaps(&m, 2., 2.))
+                    .spacing(m.gap(1.))
                     .child(
                         rect()
                             .width(Size::fill())
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(6.)
-                            .child(label().text(format!("Fotos ({})", snapshot.visible.len())))
-                            .maybe(scanning, |el| el.child(weak("varrendo…"))),
+                            .spacing(m.gap(1.5))
+                            .child(ui::text(
+                                &m,
+                                ui::Role::Small,
+                                Color::from_argb(190, 140, 140, 148),
+                                format!("Fotos ({})", snapshot.visible.len()),
+                            ))
+                            .maybe(scanning, |el| el.child(ui::faint(&m, "varrendo…"))),
                     )
-                    .child(photo_list(snapshot.visible, snapshot.sel, photos, services)),
+                    .child(photo_list(
+                        &m,
+                        row,
+                        snapshot.visible,
+                        snapshot.sel,
+                        services,
+                    )),
             )
     }
 }
 
-/// Cabeçalho de seção estilo Finder: versalete cinza, compacto.
-fn section_header(text: &str) -> impl IntoElement {
-    rect()
-        .width(Size::fill())
-        .padding(Gaps::new(4., 0., 0., 0.))
-        .child(
-            label()
-                .font_size(12.0)
-                .color(Color::from_argb(120, 0, 0, 0))
-                .text(text.to_uppercase()),
-        )
-}
-
-/// Texto secundário.
-fn weak(text: &str) -> impl IntoElement {
-    label()
-        .font_size(13.0)
-        .color(Color::from_argb(120, 0, 0, 0))
-        .text(text.to_owned())
-}
-
 /// Linha de uma pasta favorita: nome + botão de desafixar.
 fn favorite_row(
+    m: &ui::Metrics,
     dir: std::path::PathBuf,
     photos: Radio<AppState, AppChannel>,
-    config: Radio<AppState, AppChannel>,
     services: Services,
 ) -> impl IntoElement {
     let name = dir
@@ -132,39 +126,48 @@ fn favorite_row(
         .width(Size::fill())
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(6.)
-        .corner_radius(6.)
+        .spacing(m.gap(1.5))
+        .corner_radius(m.radius_sm())
         .maybe(active, |el| {
-            el.background(Color::from_argb(40, 10, 132, 255))
+            el.background(Color::from_argb(40, 255, 255, 255))
         })
-        .child(icons::icon("folder"))
+        .child(ui::svg(m, "folder"))
         .child(
             Button::new()
                 .flat()
                 .expanded()
                 .on_press(move |_| {
-                    let mut radio = photos;
-                    let mut st = radio.write();
-                    state::open_dir_path(&services, &mut st, for_open.clone());
+                    state::update(AppChannel::Photos, |st| {
+                        state::open_dir_path(&services, st, for_open.clone());
+                    });
                 })
-                .child(name),
+                .child(ui::text(m, ui::Role::Body, TEXT, name)),
         )
-        .child(
-            Button::new()
-                .flat()
-                .compact()
-                .on_press(move |_| {
-                    let mut radio = config;
-                    let mut st = radio.write();
-                    state::toggle_favorite(&mut st, &for_unpin);
+        .child(ui::icon_button(
+            m,
+            "x",
+            "Desafixar",
+            Button::new().flat().on_press(move |_| {
+                state::update(AppChannel::Config, |st| {
+                    state::toggle_favorite(st, &for_unpin);
                     st.config.save().ok();
-                })
-                .child(icons::icon("x")),
-        )
+                });
+            }),
+        ))
 }
+
+/// Altura de uma linha da lista: fonte + entrelinha + padding, arredondado.
+fn row_height(m: &ui::Metrics) -> f32 {
+    let line = m.font(ui::Role::Body) * 1.35;
+    (line + ROW_PAD * 2.0 * m.scale()).ceil()
+}
+
+/// Cor de texto padrão do painel (fundo escuro nos dois temas).
+const TEXT: Color = Color::from_rgb(228, 228, 232);
 
 /// Cabeçalho da pasta atual: nome + fixar/desafixar, e a árvore abaixo.
 fn current_folder(
+    m: &ui::Metrics,
     root: state::DirNode,
     photos: Radio<AppState, AppChannel>,
     config: Radio<AppState, AppChannel>,
@@ -179,52 +182,54 @@ fn current_folder(
 
     rect()
         .width(Size::fill())
-        .spacing(4.)
+        .spacing(m.gap(1.))
         .child(
             rect()
                 .width(Size::fill())
                 .horizontal()
                 .cross_align(Alignment::Center)
-                .spacing(6.)
-                .child(icons::icon("folder-open"))
-                .child(root.name())
+                .spacing(m.gap(1.5))
+                .child(ui::svg(m, "folder-open"))
+                .child(ui::text(m, ui::Role::Body, TEXT, root.name()))
                 .child(
-                    Button::new()
-                        .flat()
-                        .compact()
-                        .on_press(move |_| {
-                            let mut radio = config;
-                            let mut st = radio.write();
-                            let Some(dir) = st.current_dir.clone() else {
-                                return;
-                            };
-                            state::toggle_favorite(&mut st, &dir);
-                            st.config.save().ok();
-                        })
-                        .child(icons::icon_tinted(
-                            "star",
-                            14.0,
-                            if pinned {
-                                Color::from_rgb(255, 200, 0)
-                            } else {
-                                Color::from_argb(255, 115, 115, 128)
-                            },
-                        )),
+                    // O alvo do star tem área de clique mínima (24px). O
+                    // `compact()` antigo dava 14px, e um alvo de 14px é
+                    // difícil de acertar — era o star "que não funcionava".
+                    ui::icon_button_colored(
+                        m,
+                        "star",
+                        pinned.then_some(Color::from_rgb(255, 200, 0)),
+                        if pinned {
+                            "Desafixar esta pasta"
+                        } else {
+                            "Fixar esta pasta"
+                        },
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Config, |st| {
+                                let Some(dir) = st.current_dir.clone() else {
+                                    return;
+                                };
+                                state::toggle_favorite(st, &dir);
+                                st.config.save().ok();
+                            });
+                        }),
+                    ),
                 ),
         )
         .child(
             ScrollView::new()
                 .width(Size::fill())
                 .height(Size::fill())
-                .child(tree_rows(tree, current, photos, config, services)),
+                .child(tree_rows(m, tree, current, photos, config, services)),
         )
 }
 
 /// Lista recursiva de nós da árvore (pré-ordem, indentação por profundidade).
 fn tree_rows(
+    m: &ui::Metrics,
     node: state::DirNode,
     current: Option<std::path::PathBuf>,
-    photos: Radio<AppState, AppChannel>,
+    _photos: Radio<AppState, AppChannel>,
     config: Radio<AppState, AppChannel>,
     services: Services,
 ) -> impl IntoElement {
@@ -238,20 +243,21 @@ fn tree_rows(
 
     rect()
         .width(Size::fill())
-        .child(tree_row(node, current.clone(), photos, services.clone()))
+        .child(tree_row(m, node, current.clone(), services.clone()))
         .maybe(expanded, |el| {
             el.children(
-                kids.into_iter()
-                    .map(|kid| tree_rows(kid, current.clone(), photos, config, services.clone())),
+                kids.into_iter().map(|kid| {
+                    tree_rows(m, kid, current.clone(), _photos, config, services.clone())
+                }),
             )
         })
 }
 
 /// Uma linha da árvore: careta de expansão + nome da pasta.
 fn tree_row(
+    m: &ui::Metrics,
     node: state::DirNode,
     current: Option<std::path::PathBuf>,
-    photos: Radio<AppState, AppChannel>,
     services: Services,
 ) -> impl IntoElement {
     let path = node.path.clone();
@@ -260,55 +266,62 @@ fn tree_row(
     let expanded = node.expanded;
     let toggle_path = path.clone();
     let open_path = path;
+    let caret = m.icon();
 
     rect()
         .width(Size::fill())
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(4.)
-        .corner_radius(6.)
+        .spacing(m.gap(1.))
+        .corner_radius(m.radius_sm())
         .maybe(active, |el| {
-            el.background(Color::from_argb(40, 10, 132, 255))
+            el.background(Color::from_argb(40, 255, 255, 255))
         })
         .child(if has_kids {
             Button::new()
                 .flat()
-                .compact()
+                .padding(m.gap(0.5))
+                .corner_radius(m.radius_sm())
                 .on_press(move |_| {
-                    let mut radio = photos;
-                    let mut st = radio.write();
-                    let Some(root) = st.tree.as_mut() else {
-                        return;
-                    };
-                    if let Some(index) = preorder_index(root, &toggle_path) {
-                        state::toggle_node(root, index);
-                    }
+                    state::update(AppChannel::Photos, |st| {
+                        let Some(root) = st.tree.as_mut() else {
+                            return;
+                        };
+                        if let Some(index) = preorder_index(root, &toggle_path) {
+                            state::toggle_node(root, index);
+                        }
+                    });
                 })
-                .child(icons::icon(if expanded {
-                    "chevron-down"
-                } else {
-                    "chevron-right"
-                }))
+                .child(ui::svg(
+                    m,
+                    if expanded {
+                        "chevron-down"
+                    } else {
+                        "chevron-right"
+                    },
+                ))
                 .into_element()
         } else {
-            rect().width(Size::px(20.)).into_element()
+            rect().width(Size::px(caret + m.gap(1.))).into_element()
         })
         .child(
             Button::new()
                 .flat()
                 .expanded()
+                .padding(ui::gaps(m, 0., 1.))
+                .corner_radius(m.radius_sm())
                 .on_press(move |_| {
-                    let mut radio = photos;
-                    let mut st = radio.write();
-                    state::open_subdir(&services, &mut st, &open_path);
+                    state::update(AppChannel::Photos, |st| {
+                        state::open_subdir(&services, st, &open_path);
+                    });
                 })
                 .child(
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(6.)
-                        .child(icons::icon("folder"))
-                        .child(node.name()),
+                        .spacing(m.gap(1.5))
+                        .child(ui::svg(m, "folder"))
+                        .child(ui::text(m, ui::Role::Body, TEXT, node.name())),
                 ),
         )
 }
@@ -349,15 +362,20 @@ fn walk_index(
 /// faria o componente parecer "igual" e o realce ficaria congelado na foto
 /// anterior.
 fn photo_list(
+    m: &ui::Metrics,
+    row: f32,
     visible: Vec<PhotoPath>,
     sel: Option<usize>,
-    photos: Radio<AppState, AppChannel>,
     services: Services,
 ) -> impl IntoElement {
     if visible.is_empty() {
-        return weak("Nenhuma foto.").into_element();
+        return ui::faint(m, "Nenhuma foto.").into_element();
     }
     let count = visible.len();
+    let text = TEXT;
+    // `m` é `&Metrics` e a closure do VirtualScrollView é `move`: copiamos o
+    // valor (ele é `Copy`) para não emprestar o parâmetro do caller.
+    let m = *m;
 
     VirtualScrollView::new_with_data(
         (visible, sel),
@@ -380,27 +398,74 @@ fn photo_list(
                 .height(Size::px(item.size))
                 .horizontal()
                 .cross_align(Alignment::Center)
-                .padding(3.)
-                .corner_radius(6.)
-                .background(Color::from_argb(30, 0, 0, 0))
+                .padding(ui::gaps_of(m, ROW_PAD, 1.5))
+                .overflow(Overflow::Clip)
+                .corner_radius(m.radius_sm())
                 .maybe(selected, |el| {
-                    el.background(Color::from_argb(60, 10, 132, 255))
+                    el.background(Color::from_argb(40, 255, 255, 255))
                 })
-                .child(photo.display_name())
+                .child(ui::text_one_line(
+                    &m,
+                    ui::Role::Body,
+                    text,
+                    photo.display_name(),
+                ))
                 .on_press(move |_| {
-                    let mut radio = photos;
-                    let mut st = radio.write();
-                    let idx = st
-                        .visible
-                        .iter()
-                        .position(|p| p.path() == path)
-                        .unwrap_or(index);
-                    state::select_photo(&mut st, &services, idx, photo.clone());
+                    state::update(AppChannel::Photos, |st| {
+                        let idx = st
+                            .visible
+                            .iter()
+                            .position(|p| p.path() == path)
+                            .unwrap_or(index);
+                        state::select_photo(st, &services, idx, photo.clone());
+                    });
                 })
                 .into_element()
         },
     )
     .length(count)
-    .item_size(ROW)
+    .item_size(row)
     .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn row_height_grows_with_the_font_scale() {
+        let small = row_height(&ui::Metrics::new(0.75));
+        let normal = row_height(&ui::Metrics::new(1.0));
+        let big = row_height(&ui::Metrics::new(1.4));
+        assert!(small < normal, "{small} !< {normal}");
+        assert!(normal < big, "{normal} !< {big}");
+    }
+
+    #[test]
+    fn row_height_fits_one_line_of_body_text() {
+        // A linha precisa ser mais alta que a caixa da fonte, senão o texto
+        // invade a linha seguinte.
+        for scale in [0.75, 1.0, 1.2, 1.4] {
+            let m = ui::Metrics::new(scale);
+            assert!(
+                row_height(&m) >= m.font(ui::Role::Body),
+                "escala {scale}: {} < {}",
+                row_height(&m),
+                m.font(ui::Role::Body)
+            );
+        }
+    }
+
+    #[test]
+    fn tree_percent_leaves_room_for_the_photo_list() {
+        // A árvore e a lista dividem o painel por `flex`. Testar o par inteiro
+        // (e não duas constantes isoladas) pega o erro que importa: um dia em
+        // que alguém mudar `TREE_PERCENT` para 70 e a lista virar um sulco.
+        let split = (TREE_PERCENT, 100.0 - TREE_PERCENT);
+        assert!(split.0 >= 15.0 && split.0 <= 50.0, "árvore: {}", split.0);
+        assert!(
+            split.1 >= split.0,
+            "a lista precisa de mais espaço: {split:?}"
+        );
+    }
 }

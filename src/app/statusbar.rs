@@ -1,8 +1,8 @@
 //! Barra de status: posição, mensagem, dimensões e zoom.
 
-use crate::prelude::*;
-
 use crate::image_store::LoadState;
+use crate::prelude::*;
+use crate::ui;
 
 use super::services::Services;
 use super::state::{self, AppChannel, channel};
@@ -28,17 +28,30 @@ impl Component for StatusBar {
         let zoom = channel(AppChannel::Viewer).read().zoom;
         let detail = detail_label(&services.load.read().clone(), zoom);
         let saving_note = if saving { " · salvando…" } else { "" };
+        let m = ui::Metrics::new(channel(AppChannel::Config).read().config.ui_scale);
+        let dim = Color::from_argb(170, 140, 140, 148);
 
         rect()
             .width(Size::fill())
             .horizontal()
             .cross_align(Alignment::Center)
-            .padding(6.)
-            .spacing(10.)
-            .background((0, 0, 0, 30))
-            .child(secondary(&pos))
-            .child(secondary(&status))
-            .child(secondary(&format!("{detail}{saving_note}")))
+            .padding(ui::gaps(&m, 1., m.scale() * 1.5))
+            .spacing(m.gap(2.5))
+            .background(Color::from_argb(20, 255, 255, 255))
+            .border(
+                Border::new()
+                    .width(1.)
+                    .alignment(BorderAlignment::Inner)
+                    .fill(Color::from_argb(90, 128, 128, 136)),
+            )
+            .child(ui::text(&m, ui::Role::Small, dim, pos))
+            .child(ui::text(&m, ui::Role::Small, dim, status))
+            .child(ui::text(
+                &m,
+                ui::Role::Small,
+                dim,
+                format!("{detail}{saving_note}"),
+            ))
     }
 }
 
@@ -58,14 +71,6 @@ pub fn detail_label(load: &LoadState, zoom: f32) -> String {
         LoadState::Failed(e) => e.clone(),
         LoadState::Empty => String::new(),
     }
-}
-
-/// Trecho em cor secundária.
-fn secondary(text: &str) -> impl IntoElement {
-    label()
-        .font_size(12.0)
-        .color((110, 110, 118))
-        .text(text.to_owned())
 }
 
 #[cfg(test)]

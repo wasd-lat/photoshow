@@ -1,9 +1,9 @@
 //! Barra superior: menu Arquivo, ferramentas de edição e filtro de formato.
 
-use freya::components::{Button, Menu, MenuItem, Select, Tooltip, TooltipContainer};
+use freya::components::{Button, Select, Tooltip, TooltipContainer};
 
-use crate::icons;
 use crate::prelude::*;
+use crate::ui;
 
 use super::services::{CropCommand, Services};
 use super::state::{self, AppChannel, AppState, channel};
@@ -29,44 +29,80 @@ impl Component for Toolbar {
         let has_photo = photos.read().current.is_some();
         let dirty = edit.read().editor.is_dirty();
         let saving = status.read().saving;
+        let m = ui::Metrics::new(channel(AppChannel::Config).read().config.ui_scale);
 
         rect()
             .width(Size::fill())
             .horizontal()
             .main_align(Alignment::SpaceBetween)
             .cross_align(Alignment::Center)
-            .padding(6.)
-            .background(Color::from_argb(20, 0, 0, 0))
+            .padding(ui::gaps_of(m, 1., 1.5))
+            .background(Color::from_argb(24, 255, 255, 255))
+            .border(
+                Border::new()
+                    .width(1.)
+                    .alignment(BorderAlignment::Inner)
+                    .fill(Color::from_argb(90, 128, 128, 136)),
+            )
             .child(
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(5.)
-                    .child(file_menu(photos, edit, services.clone(), dirty, saving))
+                    .spacing(m.gap(1.5))
+                    .child(file_menu(&m, photos, edit, services.clone(), dirty, saving))
                     .maybe(has_photo, |el| {
-                        el.child(vrule())
-                            .child(edit_bar(edit, viewer, services.clone(), dirty))
+                        el.child(vrule(&m)).child(edit_bar(
+                            &m,
+                            edit,
+                            viewer,
+                            services.clone(),
+                            dirty,
+                        ))
                     }),
             )
             .child(
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(6.)
-                    .child(format_filter(photos, services.clone()))
-                    .child(icon_button(
+                    .spacing(m.gap(1.5))
+                    .child(format_filter(&m, photos, services.clone()))
+                    .child(ui::icon_button(
+                        &m,
+                        "panel-left",
+                        "Ocultar/mostrar navegador (Ctrl+1)",
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Config, |st| {
+                                st.config.hide_browser = !st.config.hide_browser;
+                                st.config.save().ok();
+                            })
+                        }),
+                    ))
+                    .child(ui::icon_button(
+                        &m,
+                        "panel-bottom",
+                        "Ocultar/mostrar galeria (Ctrl+2)",
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Config, |st| {
+                                st.config.hide_gallery = !st.config.hide_gallery;
+                                st.config.save().ok();
+                            })
+                        }),
+                    ))
+                    .child(ui::icon_button(
+                        &m,
                         "fullscreen",
                         "Fullscreen (F11)",
-                        Button::new().flat().compact().on_press(move |_| {
+                        Button::new().flat().on_press(move |_| {
                             let next = !viewer.read().fullscreen;
                             viewer.write().fullscreen = next;
                             window::set_fullscreen(next);
                         }),
                     ))
-                    .child(icon_button(
+                    .child(ui::icon_button(
+                        &m,
                         "settings",
                         "Configurações",
-                        Button::new().flat().compact().on_press(move |_| {
+                        Button::new().flat().on_press(move |_| {
                             dialogs.write().settings_open = true;
                         }),
                     )),
@@ -75,40 +111,46 @@ impl Component for Toolbar {
 }
 
 /// Linha divisória vertical.
-fn vrule() -> impl IntoElement {
+fn vrule(m: &ui::Metrics) -> impl IntoElement {
     rect()
         .width(Size::px(1.))
-        .height(Size::px(20.))
-        .background(Color::from_argb(40, 0, 0, 0))
-}
-
-/// Botão só com ícone, embrulhado em tooltip.
-fn icon_button(name: &str, tip: &'static str, button: Button) -> impl IntoElement {
-    TooltipContainer::new(Tooltip::new_text(tip))
-        .child(rect().child(button.child(icons::icon(name))))
+        .height(Size::px(m.gap(5.)))
+        .background(Color::from_argb(90, 128, 128, 136))
 }
 
 /// Botão com ícone + rótulo, embrulhado em tooltip.
 fn tool_button(
+    m: &ui::Metrics,
     name: &str,
     text: &'static str,
     tip: &'static str,
     button: Button,
 ) -> impl IntoElement {
     TooltipContainer::new(Tooltip::new_text(tip)).child(
-        button.child(
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .spacing(5.)
-                .child(icons::icon(name))
-                .child(text),
-        ),
+        button
+            .corner_radius(m.radius_sm())
+            .padding(ui::gaps(m, 0.5, 1.5))
+            .child(
+                rect()
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(m.gap(1.5))
+                    .child(ui::svg(m, name))
+                    .child(ui::text(m, ui::Role::Body, TEXT, text)),
+            ),
     )
 }
 
+/// Cor do texto padrão da barra (o tema é sempre escuro na barra).
+const TEXT: Color = Color::from_rgb(240, 240, 243);
+
 /// Menu Arquivo: abrir, salvar, salvar como, renomear, restaurar layout.
+///
+/// Usa [`ui::Dropdown`] em vez do `Menu` do Freya: o `Menu` entra no fluxo de
+/// layout e empurra a barra inteira para baixo quando abre — o que fazia o
+/// clique acertar o item errado e "Abrir pasta…" não abrir nada.
 fn file_menu(
+    m: &ui::Metrics,
     photos: Radio<AppState, AppChannel>,
     edit: Radio<AppState, AppChannel>,
     services: Services,
@@ -117,90 +159,124 @@ fn file_menu(
 ) -> impl IntoElement {
     let mut open = use_state(|| false);
 
-    rect()
-        .child(
-            Button::new().flat().on_press(move |_| open.toggle()).child(
-                rect()
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .spacing(5.)
-                    .child(icons::icon("folder"))
-                    .child("Arquivo"),
-            ),
-        )
-        .maybe_child(open().then(|| {
-            let open_folder: Press = {
-                let services = services.clone();
-                move |_| open_folder_dialog(services.clone())
-            }
-            .into();
-            let open_files: Press = {
-                let services = services.clone();
-                move |_| open_files_dialog(services.clone())
-            }
-            .into();
-            let do_save: Press = {
-                let services = services.clone();
-                move |_| save_overwrite(services.clone(), photos, edit)
-            }
-            .into();
-            let do_save_as: Press = {
-                let services = services.clone();
-                move |_| save_as_dialog(services.clone(), photos, edit)
-            }
-            .into();
-            let do_rename: Press =
-                (move |_| state::update(AppChannel::Dialogs, state::open_rename)).into();
-            let do_restore: Press = (move |_| {
-                state::update(AppChannel::Viewer, |st| st.maximized = false);
-                state::update(AppChannel::Status, |st| {
-                    st.status = String::from("Layout padrão restaurado.");
-                });
-            })
-            .into();
+    let open_folder: Press = {
+        let services = services.clone();
+        move |_| open_folder_dialog(services.clone())
+    }
+    .into();
+    let open_files: Press = {
+        let services = services.clone();
+        move |_| open_files_dialog(services.clone())
+    }
+    .into();
+    let do_save: Press = {
+        let services = services.clone();
+        move |_| save_overwrite(services.clone(), photos, edit)
+    }
+    .into();
+    let do_save_as: Press = {
+        let services = services.clone();
+        move |_| save_as_dialog(services.clone(), photos, edit)
+    }
+    .into();
+    let do_rename: Press = (move |_| state::update(AppChannel::Dialogs, state::open_rename)).into();
+    let do_restore: Press = (move |_| {
+        state::update(AppChannel::Viewer, |st| st.maximized = false);
+        state::update(AppChannel::Config, |st| {
+            st.config.hide_browser = false;
+            st.config.hide_gallery = false;
+            st.config.save().ok();
+        });
+        state::update(AppChannel::Status, |st| {
+            st.status = String::from("Layout padrão restaurado.");
+        });
+    })
+    .into();
 
-            Menu::new()
-                .on_close(move |_| open.set(false))
-                .child(menu_entry("folder", "Abrir pasta…", open_folder))
-                .child(menu_entry("file-image", "Abrir arquivos…", open_files))
-                .child(menu_divider())
-                .maybe(dirty && !saving, |el| {
-                    el.child(menu_entry("save", "Salvar", do_save))
-                })
-                .maybe(!saving, |el| {
-                    el.child(menu_entry("save", "Salvar como…", do_save_as))
-                })
-                .maybe(!saving, |el| {
-                    el.child(menu_entry("pencil", "Renomear… (F2)", do_rename))
-                })
-                .child(menu_divider())
-                .child(menu_entry("grid-2x2", "Restaurar layout", do_restore))
-        }))
+    // Só os *itens* vão para o Dropdown: ele monta o `Menu` em volta. Passar
+    // um `Menu` pronto aqui embrulharia menu em menu, e o menu interno
+    // ( Layer::Overlay, sem itens clicáveis no lugar certo) engole o externo.
+    let items = rect()
+        .width(Size::fill())
+        .child(menu_entry(m, "folder", "Abrir pasta…", open_folder))
+        .child(menu_entry(m, "file-image", "Abrir arquivos…", open_files))
+        .child(menu_divider(m))
+        .maybe(dirty && !saving, |el| {
+            el.child(menu_entry(m, "save", "Salvar", do_save))
+        })
+        .maybe(!saving, |el| {
+            el.child(menu_entry(m, "save", "Salvar como…", do_save_as))
+        })
+        .maybe(!saving, |el| {
+            el.child(menu_entry(m, "pencil", "Renomear… (F2)", do_rename))
+        })
+        .child(menu_divider(m))
+        .child(menu_entry(m, "grid-2x2", "Restaurar layout", do_restore));
+
+    let trigger = Button::new()
+        .flat()
+        .corner_radius(m.radius_sm())
+        .padding(ui::gaps(m, 1., 2.))
+        .on_press(move |_| open.toggle())
+        .child(
+            rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(m.gap(1.5))
+                .child(ui::svg(m, "folder"))
+                .child(ui::text(m, ui::Role::Body, TEXT, "Arquivo")),
+        );
+
+    let close: EventHandler<()> = (move |_| open.set(false)).into();
+
+    ui::Dropdown::new(open(), trigger, items, close)
 }
 
 /// Item de menu com ícone.
-fn menu_entry(name: &str, text: &'static str, on_press: Press) -> impl IntoElement {
-    MenuItem::new().on_press(on_press).child(
-        rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .spacing(8.)
-            .child(icons::icon(name))
-            .child(text),
+///
+/// Cada item é um alvo de clique do tamanho inteiro do item — o `MenuItem` do
+/// Freya só dá clique no texto, e um item de menu clicável só no glifo é
+/// exatamente o tipo de coisa que faz "Abrir pasta…" parecer quebrado.
+fn menu_entry(
+    m: &ui::Metrics,
+    name: &str,
+    text: &'static str,
+    on_press: Press,
+) -> impl IntoElement {
+    let press: EventHandler<Event<PressEventData>> = on_press;
+    TooltipContainer::new(Tooltip::new_text(text)).child(
+        Button::new()
+            .flat()
+            .expanded()
+            // Alvo de clique alto, via padding (o `Button` do Freya não tem
+            // `min_height`); 1.0 vertical já dá ~26px, acima do mínimo de 24.
+            .padding(ui::gaps(m, 1., 2.))
+            .corner_radius(m.radius_sm())
+            .on_press(press)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(m.gap(2.))
+                    .child(ui::svg(m, name))
+                    .child(ui::text(m, ui::Role::Body, TEXT, text)),
+            ),
     )
 }
 
 /// Linha divisória dentro do menu.
-fn menu_divider() -> impl IntoElement {
+fn menu_divider(m: &ui::Metrics) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .height(Size::px(1.))
-        .padding(4.)
-        .background(Color::from_argb(30, 0, 0, 0))
+        .padding(m.gap(1.))
+        .background(Color::from_argb(70, 128, 128, 136))
 }
 
 /// Ferramentas de edição: rotate, crop, proporção, undo/redo, reset.
 fn edit_bar(
+    m: &ui::Metrics,
     edit: Radio<AppState, AppChannel>,
     viewer: Radio<AppState, AppChannel>,
     services: Services,
@@ -215,8 +291,9 @@ fn edit_bar(
     rect()
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(4.)
+        .spacing(m.gap(1.))
         .child(tool_button(
+            m,
             "rotate-ccw",
             "90°",
             "Rotacionar anti-horário",
@@ -230,6 +307,7 @@ fn edit_bar(
             }),
         ))
         .child(tool_button(
+            m,
             "rotate-cw",
             "90°",
             "Rotacionar horário",
@@ -242,8 +320,9 @@ fn edit_bar(
                 }
             }),
         ))
-        .child(vrule())
+        .child(vrule(m))
         .child(tool_button(
+            m,
             "crop",
             if crop_mode { "Crop… (ativo)" } else { "Crop" },
             "Arraste para recortar, alças redimensionam, Enter aplica",
@@ -259,56 +338,52 @@ fn edit_bar(
                 .child(aspect_select(viewer, services.clone())),
         )
         .maybe(crop_mode, |el| {
-            el.child(
-                Button::new()
-                    .flat()
-                    .on_press({
-                        let services = services.clone();
-                        move |_| services.request_crop(CropCommand::Apply)
-                    })
-                    .child(
-                        rect()
-                            .horizontal()
-                            .cross_align(Alignment::Center)
-                            .spacing(5.)
-                            .child(icons::icon("check"))
-                            .child("Aplicar"),
-                    ),
-            )
+            el.child(tool_button(
+                m,
+                "check",
+                "Aplicar",
+                "Aplica o recorte (Enter)",
+                Button::new().flat().on_press({
+                    let services = services.clone();
+                    move |_| services.request_crop(CropCommand::Apply)
+                }),
+            ))
         })
-        .child(vrule())
+        .child(vrule(m))
+        .child(ui::icon_button(
+            m,
+            "undo",
+            "Desfazer (Ctrl+Z)",
+            Button::new().flat().enabled(can_undo).on_press({
+                let services = services.clone();
+                move |_| {
+                    state::update(AppChannel::Edit, |st| {
+                        state::undo(st, &services);
+                    });
+                }
+            }),
+        ))
+        .child(ui::icon_button(
+            m,
+            "redo",
+            "Refazer (Ctrl+Shift+Z)",
+            Button::new().flat().enabled(can_redo).on_press({
+                let services = services.clone();
+                move |_| {
+                    state::update(AppChannel::Edit, |st| {
+                        state::redo(st, &services);
+                    });
+                }
+            }),
+        ))
         .child(
-            Button::new()
-                .flat()
-                .enabled(can_undo)
-                .on_press({
-                    let services = services.clone();
-                    move |_| {
-                        state::update(AppChannel::Edit, |st| {
-                            state::undo(st, &services);
-                        });
-                    }
-                })
-                .child(icons::icon("undo")),
-        )
-        .child(
-            Button::new()
-                .flat()
-                .enabled(can_redo)
-                .on_press({
-                    let services = services.clone();
-                    move |_| {
-                        state::update(AppChannel::Edit, |st| {
-                            state::redo(st, &services);
-                        });
-                    }
-                })
-                .child(icons::icon("redo")),
-        )
-        .child(
+            // Mesmo padding do `tool_button`, senão "Reset" fica com altura
+            // diferente dos vizinhos e desalinha a barra.
             Button::new()
                 .flat()
                 .enabled(dirty)
+                .corner_radius(m.radius_sm())
+                .padding(ui::gaps(m, 0.5, 1.5))
                 .on_press({
                     let services = services.clone();
                     move |_| {
@@ -317,7 +392,7 @@ fn edit_bar(
                         });
                     }
                 })
-                .child("Reset"),
+                .child(ui::text(m, ui::Role::Body, TEXT, "Reset")),
         )
         .maybe(dirty, |el| {
             // Ponto em vez de "• editado": ~10px em vez de ~60, e o texto
@@ -359,7 +434,11 @@ fn aspect_select(viewer: Radio<AppState, AppChannel>, services: Services) -> imp
 }
 
 /// Dropdown de filtro de formato.
-fn format_filter(photos: Radio<AppState, AppChannel>, services: Services) -> impl IntoElement {
+fn format_filter(
+    m: &ui::Metrics,
+    photos: Radio<AppState, AppChannel>,
+    services: Services,
+) -> impl IntoElement {
     let selected = photos.read().format_filter;
     let current = state::FORMAT_FILTERS
         .get(selected)
@@ -369,8 +448,8 @@ fn format_filter(photos: Radio<AppState, AppChannel>, services: Services) -> imp
     rect()
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(5.)
-        .child(label().text("Formato:"))
+        .spacing(m.gap(1.5))
+        .child(ui::text(m, ui::Role::Body, TEXT, "Formato:"))
         .child(Select::new().selected_item(current).children(
             state::FORMAT_FILTERS.iter().enumerate().map(|(i, name)| {
                 let on_press: Press = {
