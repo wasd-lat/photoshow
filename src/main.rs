@@ -1,27 +1,15 @@
-//! photoshow: visualizador de fotos rápido com egui.
-//!
-//! M1: janela eframe 0.36 + abrir pasta/arquivos via rfd + lista lateral.
-//! Fases seguintes: render da imagem (image_store), EXIF, thumbs (taffy),
-//! edição não-destrutiva rotate/crop (editor).
+//! Ponto de entrada: só a janela. O app em si está em `photoshow::app`.
 
-mod app;
-mod config;
-mod editor;
-mod exif;
-mod fs_browser;
-mod icons;
-mod image_store;
-mod thumbs;
+use freya::prelude::*;
+use photoshow::app;
 
-use anyhow::Context;
-
-fn main() -> anyhow::Result<()> {
-    let native_options = eframe::NativeOptions::default();
-    eframe::run_native(
-        "photoshow",
-        native_options,
-        Box::new(|cc| Ok(Box::new(app::PhotoShowApp::new(cc)))),
+fn main() {
+    launch(
+        LaunchConfig::new().with_window(
+            WindowConfig::new(app::app)
+                .with_title("photoshow")
+                .with_size(1280., 900.)
+                .with_min_size(720., 480.),
+        ),
     )
-    .map_err(|e| anyhow::anyhow!("eframe saiu com erro: {e}"))
-    .context("falha ao iniciar o photoshow")
 }

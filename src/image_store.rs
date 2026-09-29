@@ -1,20 +1,27 @@
-//! Cache de imagens: decode em background -> texturas egui.
+//! Cache de imagens: decode em background -> `ImageHandle` do Freya.
 //!
-//! Fluxo: `select()` dispara uma thread que decodifica (com correção EXIF)
-//! e reduz para display (max [`DISPLAY_MAX_DIM`] px); o resultado volta por
-//! `mpsc` com id de geração — obsoletos são descartados. `poll()` cria a
-//! `TextureHandle` e pede repaint enquanto há carga pendente.
+//! O domínio não conhece a GUI: quem converte RGBA em `ImageHandle` é
+//! [`image_handle`], e quem agenda o re-render é o *pump* em
+//! `crate::app::services` (o equivalente do `request_repaint` do egui).
 //!
-//! extras Fase 3/4:
-//! - `ensure_prefetched()`: decodifica vizinhos (±2) em background; `select()`
-//!   consome o cache e vira instantâneo (cap 4, path-keyed).
-//! - `rebuild_preview()` / `restore_base()`: aplica o [`EditorState`] na
-//!   imagem de display e troca a textura (preview de rotate/crop).
+//! Fluxo: [`ImageStore::select`] dispara uma thread que decodifica (com
+//! correção EXIF) e reduz para display (max [`DISPLAY_MAX_DIM`] px); o
+//! resultado volta por `mpsc` com id de geração — obsoletos são descartados.
+//! [`ImageStore::poll`] publica o resultado num `State` reativo.
+//!
+//! extras:
+//! - [`ImageStore::ensure_prefetched`]: decodifica vizinhos (±2) em
+//!   background; `select` consome o cache e vira instantâneo (cap 4).
+//! - [`ImageStore::apply_preview`]: aplica o [`EditorState`] na imagem de
+//!   display (preview de rotate/crop) e publica o novo `State`.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use crate::prelude::*;
 use thiserror::Error;
 
 use crate::editor::EditorState;
@@ -22,7 +29,7 @@ use crate::exif::{apply_orientation, read_orientation};
 
 /// Maior lado (px) da versão de display. Full-res fica em `full`.
 pub const DISPLAY_MAX_DIM: u32 = 2048;
-/// Vizinhos pré-decodificados para cada lado + tamanho do cache.
+/// Vizinhos pré-decodificados para cada lado.
 const PREFETCH_RADIUS: isize = 2;
 const PREFETCH_CAP: usize = 4;
 /// Teto de RAM do prefetch (full-res de arquivos grandes pesa GBs).
@@ -55,7 +62,7 @@ impl From<image::ImageError> for LoadError {
 /// Foto decodificada: full-res corrigida + versão de display (orientada).
 #[derive(Debug)]
 pub struct DecodedPhoto {
-    /// Imagem original corrigida (para bake da Fase 4).
+    /// Imagem original corrigida (para o bake no save).
     pub full: image::DynamicImage,
     /// Versão reduzida orientada (para display e preview do editor).
     pub display: image::DynamicImage,
@@ -81,13 +88,50 @@ pub fn decode_photo(path: &Path) -> Result<DecodedPhoto, LoadError> {
     })
 }
 
-/// Converte para upload em GPU.
-fn to_color(img: &image::DynamicImage) -> egui::ColorImage {
+/// Converte uma imagem do crate `image` no `ImageHandle` do Freya.
+///
+/// RGBA não pré-multiplicado: é o que o Skia consome direto, sem cópia extra.
+#[must_use]
+pub fn image_handle(img: &image::DynamicImage) -> Option<ImageHandle> {
     let rgba = img.to_rgba8();
-    egui::ColorImage::from_rgba_unmultiplied(
-        [rgba.width() as usize, rgba.height() as usize],
-        rgba.as_raw(),
+    ImageHandle::from_rgba(
+        rgba.width(),
+        rgba.height(),
+        Bytes::from(rgba.into_raw()),
+        AlphaType::Unpremul,
     )
+}
+
+/// Estado reativo do carregamento atual.
+#[derive(Clone, PartialEq, Default)]
+pub enum LoadState {
+    /// Nada selecionado.
+    #[default]
+    Empty,
+    /// Decodificando em background.
+    Loading,
+    /// Pronta para exibir.
+    Loaded {
+        /// Handle atual (base ou preview do editor).
+        image: ImageHandle,
+        /// Tamanho em px da imagem exibida (pós-rotate do editor).
+        display_px: (u32, u32),
+        /// Tamanho em px da full-res.
+        full_px: (u32, u32),
+    },
+    /// Falha (msg para status bar).
+    Failed(String),
+}
+
+impl LoadState {
+    /// Dimensões (w, h) em px do preview exibido.
+    #[must_use]
+    pub fn display_px(&self) -> (u32, u32) {
+        match self {
+            Self::Loaded { display_px, .. } => *display_px,
+            _ => (0, 0),
+        }
+    }
 }
 
 struct LoadMsg {
@@ -101,46 +145,41 @@ struct PrefetchMsg {
     result: Option<DecodedPhoto>,
 }
 
-/// Estado visível do carregamento atual.
-pub enum LoadState {
-    /// Nada selecionado.
-    Empty,
-    /// Decodificando em background.
-    Loading,
-    /// Pronta para exibir.
-    Loaded {
-        /// Textura atual (base ou preview do editor).
-        texture: egui::TextureHandle,
-        /// Tamanho em px da imagem exibida (pós-rotate do editor).
-        display_px: egui::Vec2,
-        /// Tamanho em px da full-res.
-        full_px: (u32, u32),
-    },
-    /// Falha (msg para status bar).
-    Failed(String),
-}
-
-/// Guarda seleção atual + textura; `display_img` alimenta o editor.
-pub struct ImageStore {
+struct Inner {
     tx: Sender<LoadMsg>,
     rx: Receiver<LoadMsg>,
-    next_id: u64,
-    tex_seq: u64,
-    current_id: u64,
-    texture: Option<egui::TextureHandle>,
-    display_px: egui::Vec2,
-    display_img: Option<image::DynamicImage>,
-    full: Option<image::DynamicImage>,
-    full_px: (u32, u32),
-    error: Option<String>,
-    has_selection: bool,
-    // Prefetch de vizinhos.
     pre_tx: Sender<PrefetchMsg>,
     pre_rx: Receiver<PrefetchMsg>,
+    next_id: u64,
+    current_id: u64,
+    display_px: (u32, u32),
+    full_px: (u32, u32),
+    display_img: Option<image::DynamicImage>,
+    full: Option<image::DynamicImage>,
+    error: Option<String>,
+    has_selection: bool,
     prefetch: HashMap<PathBuf, DecodedPhoto>,
     prefetch_order: VecDeque<PathBuf>,
     prefetch_bytes: u64,
     inflight: HashSet<PathBuf>,
+    /// Houve mudança que ainda não foi convertida em `LoadState`?
+    ///
+    /// Sem isto, cada `poll` reconstruiria o `ImageHandle` (e subiria a imagem
+    /// de novo para a GPU) a 60 Hz, e o `State` veria um valor novo sempre,
+    /// redesenhando o viewer para mostrar exatamente a mesma coisa.
+    publish_dirty: bool,
+}
+
+/// Guarda seleção + imagem decodificada; alimenta o editor e o viewer.
+///
+/// `Clone` compartilha o mesmo estado (usado via contexto Freya).
+#[derive(Clone)]
+pub struct ImageStore(Rc<RefCell<Inner>>);
+
+impl Default for ImageStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ImageStore {
@@ -149,86 +188,111 @@ impl ImageStore {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
         let (pre_tx, pre_rx) = mpsc::channel();
-        Self {
+        Self(Rc::new(RefCell::new(Inner {
             tx,
             rx,
-            next_id: 0,
-            tex_seq: 0,
-            current_id: 0,
-            texture: None,
-            display_px: egui::Vec2::ZERO,
-            display_img: None,
-            full: None,
-            full_px: (0, 0),
-            error: None,
-            has_selection: false,
             pre_tx,
             pre_rx,
+            next_id: 0,
+            current_id: 0,
+            display_px: (0, 0),
+            full_px: (0, 0),
+            display_img: None,
+            full: None,
+            error: None,
+            has_selection: false,
             prefetch: HashMap::new(),
             prefetch_order: VecDeque::new(),
             prefetch_bytes: 0,
             inflight: HashSet::new(),
-        }
+            publish_dirty: true,
+        })))
     }
 
-    fn upload(&mut self, ctx: &egui::Context, img: &image::DynamicImage, tag: &str) {
-        self.tex_seq += 1;
-        self.display_px = egui::Vec2::new(img.width() as f32, img.height() as f32);
-        self.texture = Some(ctx.load_texture(
-            format!("photo-{tag}-{}", self.tex_seq),
-            to_color(img),
-            egui::TextureOptions::LINEAR,
-        ));
+    fn install(inner: &mut Inner, dec: DecodedPhoto) {
+        inner.full_px = dec.full_size;
+        let base = dec.display.clone();
+        inner.display_px = (base.width(), base.height());
+        inner.display_img = Some(base);
+        inner.full = Some(dec.full);
+        inner.publish_dirty = true;
+    }
+
+    /// Publica o estado atual a partir das imagens em memória.
+    ///
+    /// `None` quando nada mudou desde o último poll: reconstruir o
+    /// `ImageHandle` custa uma cópia para a GPU, e não pode acontecer a cada
+    /// tique do pump.
+    fn publish(inner: &mut Inner) -> Option<LoadState> {
+        if !inner.publish_dirty {
+            return None;
+        }
+        inner.publish_dirty = false;
+        Some(Self::build_state(inner))
+    }
+
+    fn build_state(inner: &Inner) -> LoadState {
+        if !inner.has_selection {
+            return LoadState::Empty;
+        }
+        if let Some(e) = &inner.error {
+            return LoadState::Failed(e.clone());
+        }
+        let Some(display) = inner.display_img.as_ref() else {
+            return LoadState::Loading;
+        };
+        match image_handle(display) {
+            Some(image) => LoadState::Loaded {
+                image,
+                display_px: inner.display_px,
+                full_px: inner.full_px,
+            },
+            None => LoadState::Failed(String::from("falha ao enviar imagem para a GPU")),
+        }
     }
 
     /// Seleciona foto: consome prefetch (instantâneo) ou decodifica em background.
-    pub fn select(&mut self, ctx: &egui::Context, photo: &crate::fs_browser::PhotoPath) {
-        self.next_id += 1;
-        let id = self.next_id;
-        self.current_id = id;
-        self.has_selection = true;
-        self.texture = None;
-        self.display_img = None;
-        self.full = None;
-        self.error = None;
+    pub fn select(&self, photo: &crate::fs_browser::PhotoPath) {
         let path = photo.path().to_path_buf();
-
-        if let Some(dec) = self.prefetch.remove(&path) {
-            self.prefetch_bytes = self.prefetch_bytes.saturating_sub(decoded_bytes(&dec));
-            self.display_px =
-                egui::Vec2::new(dec.display.width() as f32, dec.display.height() as f32);
-            self.full_px = dec.full_size;
-            self.display_img = Some(dec.display);
-            self.full = Some(dec.full);
-            let base = self.display_img.as_ref().expect("display recém-guardado");
-            let base = base.clone();
-            self.upload(ctx, &base, "hit");
-            return;
+        let cached = {
+            let mut inner = self.0.borrow_mut();
+            inner.next_id += 1;
+            inner.current_id = inner.next_id;
+            let id = inner.current_id;
+            inner.has_selection = true;
+            inner.display_img = None;
+            inner.full = None;
+            inner.display_px = (0, 0);
+            inner.error = None;
+            inner.publish_dirty = true;
+            // Cache de prefetch: caminho quente, sem thread.
+            match inner.prefetch.remove(&path) {
+                Some(dec) => {
+                    inner.prefetch_bytes = inner.prefetch_bytes.saturating_sub(decoded_bytes(&dec));
+                    Self::install(&mut inner, dec);
+                    None
+                }
+                None => Some((inner.tx.clone(), id)),
+            }
+        };
+        // Só decodifica em thread quando o prefetch não acertou.
+        if let Some((tx, id)) = cached {
+            std::thread::spawn(move || {
+                let result = decode_photo(&path);
+                let _ = tx.send(LoadMsg { id, path, result });
+            });
         }
-
-        let tx = self.tx.clone();
-        let thread_ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let result = decode_photo(&path);
-            let _ = tx.send(LoadMsg { id, path, result });
-            thread_ctx.request_repaint();
-        });
-        ctx.request_repaint();
     }
 
-    /// Garante prefetch dos vizinhos [center-R, center+R] (chamar todo frame; barato).
+    /// Garante prefetch dos vizinhos [center-R, center+R].
     /// `max_file_bytes`: pula arquivos maiores (0 = prefetch desativado).
-    /// Metadados (tamanho) são baratos; o decode pesado fica na thread.
     pub fn ensure_prefetched(
-        &mut self,
+        &self,
         photos: &[crate::fs_browser::PhotoPath],
         center: usize,
         max_file_bytes: u64,
     ) {
         if photos.is_empty() || max_file_bytes == 0 {
-            return;
-        }
-        if photos.is_empty() {
             return;
         }
         for d in -PREFETCH_RADIUS..=PREFETCH_RADIUS {
@@ -239,18 +303,21 @@ impl ImageStore {
                 continue;
             };
             let path = photos[i].path().to_path_buf();
-            if self.prefetch.contains_key(&path) || !self.inflight.insert(path.clone()) {
-                continue;
-            }
-            // Guarda barato: arquivo gigante nem entra na fila de decode.
-            let small_enough = std::fs::metadata(&path)
-                .map(|m| m.len() <= max_file_bytes)
-                .unwrap_or(true);
-            if !small_enough {
-                self.inflight.remove(&path);
-                continue;
-            }
-            let tx = self.pre_tx.clone();
+            let tx = {
+                let mut inner = self.0.borrow_mut();
+                if inner.prefetch.contains_key(&path) || !inner.inflight.insert(path.clone()) {
+                    continue;
+                }
+                // Guarda barato: arquivo gigante nem entra na fila de decode.
+                let small_enough = std::fs::metadata(&path)
+                    .map(|m| m.len() <= max_file_bytes)
+                    .unwrap_or(true);
+                if !small_enough {
+                    inner.inflight.remove(&path);
+                    continue;
+                }
+                inner.pre_tx.clone()
+            };
             std::thread::spawn(move || {
                 let result = decode_photo(&path).ok();
                 let _ = tx.send(PrefetchMsg { path, result });
@@ -258,112 +325,105 @@ impl ImageStore {
         }
     }
 
-    /// Drena resultados (principal + prefetch). Retorna `true` se há carga pendente.
-    pub fn poll(&mut self, ctx: &egui::Context) -> bool {
-        while let Ok(msg) = self.pre_rx.try_recv() {
-            self.inflight.remove(&msg.path);
-            if let Some(dec) = msg.result {
-                self.prefetch_bytes += decoded_bytes(&dec);
-                self.prefetch_order.push_back(msg.path.clone());
-                self.prefetch.insert(msg.path, dec);
-                // Despeja os mais antigos por contagem E por bytes.
-                while self.prefetch.len() > PREFETCH_CAP || self.prefetch_bytes > PREFETCH_BYTES_CAP
-                {
-                    if let Some(old) = self.prefetch_order.pop_front() {
-                        if let Some(evicted) = self.prefetch.remove(&old) {
-                            self.prefetch_bytes =
-                                self.prefetch_bytes.saturating_sub(decoded_bytes(&evicted));
+    /// Drena resultados (principal + prefetch) e publica em `load`.
+    ///
+    /// Devolve `true` se o estado reativo mudou (o `State` já foi notificado,
+    /// o que agenda o próximo render no Freya).
+    pub fn poll(&self, load: State<LoadState>) -> bool {
+        let mut changed = false;
+        {
+            let mut inner = self.0.borrow_mut();
+            while let Ok(msg) = inner.pre_rx.try_recv() {
+                changed = true;
+                inner.inflight.remove(&msg.path);
+                if let Some(dec) = msg.result {
+                    inner.prefetch_bytes += decoded_bytes(&dec);
+                    inner.prefetch_order.push_back(msg.path.clone());
+                    inner.prefetch.insert(msg.path, dec);
+                    // Despeja os mais antigos por contagem E por bytes.
+                    while inner.prefetch.len() > PREFETCH_CAP
+                        || inner.prefetch_bytes > PREFETCH_BYTES_CAP
+                    {
+                        if let Some(old) = inner.prefetch_order.pop_front() {
+                            if let Some(evicted) = inner.prefetch.remove(&old) {
+                                inner.prefetch_bytes =
+                                    inner.prefetch_bytes.saturating_sub(decoded_bytes(&evicted));
+                            }
+                        } else {
+                            break;
                         }
-                    } else {
-                        break;
+                    }
+                }
+            }
+            while let Ok(msg) = inner.rx.try_recv() {
+                if msg.id != inner.current_id {
+                    continue; // obsoleto: usuário já navegou para outra foto
+                }
+                changed = true;
+                match msg.result {
+                    Ok(dec) => Self::install(&mut inner, dec),
+                    Err(e) => {
+                        inner.error = Some(format!("{}: {e}", msg.path.display()));
+                        inner.publish_dirty = true;
                     }
                 }
             }
         }
-        let mut pending = self.has_selection && self.texture.is_none() && self.error.is_none();
-        while let Ok(msg) = self.rx.try_recv() {
-            if msg.id != self.current_id {
-                continue; // obsoleto: usuário já navegou para outra foto
-            }
-            pending = false;
-            match msg.result {
-                Ok(dec) => {
-                    self.full_px = dec.full_size;
-                    self.display_img = Some(dec.display);
-                    self.full = Some(dec.full);
-                    let base = self.display_img.as_ref().expect("display recém-guardado");
-                    let base = base.clone();
-                    self.upload(ctx, &base, "base");
-                }
-                Err(e) => self.error = Some(format!("{}: {e}", msg.path.display())),
-            }
+
+        let mut load = load;
+        if let Some(next) = Self::publish(&mut self.0.borrow_mut())
+            && *load.peek() != next
+        {
+            load.set(next);
+            changed = true;
         }
-        if pending {
-            ctx.request_repaint();
-        }
-        pending
+        changed
     }
 
-    /// Reconstrói a textura aplicando o estado do editor na imagem de display.
-    pub fn rebuild_preview(&mut self, ctx: &egui::Context, state: &EditorState) {
-        let Some(base) = self.display_img.clone() else {
-            return;
-        };
-        let edited = crate::editor::apply_to_image(&base, state);
-        self.upload(ctx, &edited, "preview");
-    }
-
-    /// Restaura a textura base (sem edições).
-    pub fn restore_base(&mut self, ctx: &egui::Context) {
-        let Some(base) = self.display_img.clone() else {
-            return;
-        };
-        self.upload(ctx, &base, "base");
+    /// Reconstrói a imagem aplicando o estado do editor e publica o resultado.
+    ///
+    /// `edit = None` volta à imagem base. Cobre rotate, crop, undo, redo e
+    /// reset por um único caminho — o mesmo `bake` é usado no save.
+    pub fn apply_preview(&self, edit: Option<&EditorState>, load: State<LoadState>) {
+        {
+            let mut inner = self.0.borrow_mut();
+            let Some(base) = inner.display_img.clone() else {
+                return;
+            };
+            let shown = match edit {
+                Some(edit) => crate::editor::apply_to_image(&base, edit),
+                None => base,
+            };
+            inner.display_px = (shown.width(), shown.height());
+            inner.display_img = Some(shown);
+            inner.publish_dirty = true;
+        }
+        self.poll(load);
     }
 
     /// Dimensões da imagem de display pré-edição (para rotate/bake).
     #[must_use]
     pub fn display_base_dims(&self) -> Option<(u32, u32)> {
-        self.display_img.as_ref().map(|d| (d.width(), d.height()))
+        self.0
+            .borrow()
+            .display_img
+            .as_ref()
+            .map(|d| (d.width(), d.height()))
     }
 
     /// Cópia da full-res para o thread de salvamento.
     #[must_use]
     pub fn full_image(&self) -> Option<image::DynamicImage> {
-        self.full.clone()
-    }
-
-    /// Estado atual para a UI.
-    #[must_use]
-    pub fn state(&self) -> LoadState {
-        if !self.has_selection {
-            return LoadState::Empty;
-        }
-        if let Some(e) = &self.error {
-            return LoadState::Failed(e.clone());
-        }
-        match &self.texture {
-            Some(t) => LoadState::Loaded {
-                texture: t.clone(),
-                display_px: self.display_px,
-                full_px: self.full_px,
-            },
-            None => LoadState::Loading,
-        }
+        self.0.borrow().full.clone()
     }
 
     /// Limpa prefetch (troca de pasta/arquivos).
-    pub fn clear_prefetch(&mut self) {
-        self.prefetch.clear();
-        self.prefetch_order.clear();
-        self.prefetch_bytes = 0;
-        self.inflight.clear();
-    }
-}
-
-impl Default for ImageStore {
-    fn default() -> Self {
-        Self::new()
+    pub fn clear_prefetch(&self) {
+        let mut inner = self.0.borrow_mut();
+        inner.prefetch.clear();
+        inner.prefetch_order.clear();
+        inner.prefetch_bytes = 0;
+        inner.inflight.clear();
     }
 }
 
@@ -402,5 +462,12 @@ mod tests {
     fn decode_missing_file_errors() {
         let err = decode_photo(Path::new("/nao/existe/foto.png")).expect_err("deveria falhar");
         assert!(matches!(err, LoadError::Io(_)));
+    }
+
+    #[test]
+    fn image_handle_roundtrips_dimensions() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(8, 4));
+        let handle = image_handle(&img).expect("handle");
+        assert_eq!((handle.image.width(), handle.image.height()), (8, 4));
     }
 }

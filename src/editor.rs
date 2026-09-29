@@ -52,7 +52,7 @@ impl EditorState {
 }
 
 /// Pilha de edição com undo/redo (snapshots baratos: 2 campos).
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EditorStack {
     history: Vec<EditorState>,
     future: Vec<EditorState>,
@@ -393,5 +393,21 @@ mod tests {
             out.save(&path).unwrap_or_else(|_| panic!("save {ext}"));
             assert!(path.exists());
         }
+    }
+
+    #[test]
+    fn stack_clone_preserves_history() {
+        let mut ed = EditorStack::new();
+        ed.rotate_cw((10, 10));
+        ed.set_crop(Some(CropRect {
+            x: 1,
+            y: 1,
+            w: 2,
+            h: 2,
+        }));
+        let copy = ed.clone();
+        assert_eq!(copy.state(), ed.state());
+        assert!(copy.can_undo());
+        assert!(!copy.can_redo());
     }
 }

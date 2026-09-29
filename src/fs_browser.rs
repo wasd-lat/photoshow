@@ -3,7 +3,6 @@
 //! Tipos de domínio (anti-primitivo): [`PhotoPath`] em vez de `String` solta.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 
 /// Extensões suportadas no MVP (minúsculas, sem ponto).
 pub const SUPPORTED_EXTENSIONS: &[&str] =
@@ -20,8 +19,6 @@ impl PhotoPath {
     }
 
     /// Caminho interno.
-    /// TODO(Fase 2): remover o allow quando o image_store carregar por ele.
-    #[allow(dead_code)]
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.0
@@ -46,39 +43,18 @@ pub fn has_supported_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Varredura em background: walk + filtro + ordenação fora da thread da UI.
-///
-/// O resultado chega pelo channel com o `id` da geração — se o usuário abrir
-/// outra pasta antes de terminar, o resultado obsoleto é descartado pelo app.
-/// Usa o crate `ignore`: pula `.git` sempre, ocultas e `gitignore` conforme
-/// as opções (rápido em árvores com milhares de arquivos não-imagem).
-pub fn scan_dir_async(dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let (photos, files_seen) = walk_photos(&dir, opts);
-        let _ = tx.send(ScanResult {
-            id,
-            dir,
-            photos,
-            files_seen,
-        });
-    });
-    rx
-}
-
-/// Opções da varredura (espelham as preferências do menu ⚙).
+/// Opções da varredura (espelham as preferências do menu de ajustes).
 #[derive(Debug, Clone, Copy)]
 pub struct ScanOptions {
     /// Respeita `.gitignore`/`.ignore` (vale fora de repo git também).
     pub respect_gitignore: bool,
-    /// Pula arquivos e pastas ocultas (dotfiles).
+    /// Pula arquivos e pastas ocultos (dotfiles).
     pub skip_hidden: bool,
 }
 
 /// Resultado de uma varredura (lista vazia = nenhuma imagem, não erro).
+#[derive(Debug, Clone)]
 pub struct ScanResult {
-    /// Geração do pedido (para descartar obsoletos).
-    pub id: u64,
     /// Pasta varrida.
     pub dir: PathBuf,
     /// Fotos ordenadas por nome.
@@ -114,23 +90,29 @@ fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64) {
             photos.push(p);
         }
     }
-    photos.sort_by(|a, b| {
-        a.display_name()
-            .to_lowercase()
-            .cmp(&b.display_name().to_lowercase())
-    });
+    photos.sort_by_cached_key(|p| p.display_name().to_lowercase());
     (photos, files_seen)
 }
 
-/// Filtra uma lista solta de arquivos (diálogo rfd) para fotos válidas.
+/// Varredura de pasta (bloqueante: chamar de uma thread de worker).
+///
+/// Pula `.git` sempre, ocultas e `gitignore` conforme as opções (rápido em
+/// árvores com milhares de arquivos não-imagem).
+#[must_use]
+pub fn scan_blocking(dir: PathBuf, opts: ScanOptions) -> ScanResult {
+    let (photos, files_seen) = walk_photos(&dir, opts);
+    ScanResult {
+        dir,
+        photos,
+        files_seen,
+    }
+}
+
+/// Filtra uma lista solta de arquivos (diálogo nativo) para fotos válidas.
 #[must_use]
 pub fn filter_loose_files(paths: Vec<PathBuf>) -> Vec<PhotoPath> {
     let mut photos: Vec<PhotoPath> = paths.into_iter().filter_map(PhotoPath::new).collect();
-    photos.sort_by(|a, b| {
-        a.display_name()
-            .to_lowercase()
-            .cmp(&b.display_name().to_lowercase())
-    });
+    photos.sort_by_cached_key(|p| p.display_name().to_lowercase());
     photos
 }
 
@@ -206,33 +188,27 @@ mod tests {
         }
     }
 
-    fn recv_scan(rx: mpsc::Receiver<ScanResult>) -> ScanResult {
-        rx.recv_timeout(std::time::Duration::from_secs(30))
-            .expect("scan termina")
-    }
-
     #[test]
-    fn scan_async_lists_and_sorts_photos() {
+    fn scan_lists_and_sorts_photos() {
         let dir = tempfile::tempdir().expect("tempdir");
         for name in ["b.png", "a.JPG", "nota.txt", "c.gif"] {
             fs::write(dir.path().join(name), b"x").expect("write");
         }
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 7));
-        assert_eq!(res.id, 7);
+        let res = scan_blocking(dir.path().to_path_buf(), scan_opts());
         assert_eq!(res.files_seen, 4);
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
         assert_eq!(names, vec!["a.JPG", "b.png", "c.gif"]);
     }
 
     #[test]
-    fn scan_async_empty_dir_returns_empty_vec() {
+    fn scan_empty_dir_returns_empty_vec() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 1));
+        let res = scan_blocking(dir.path().to_path_buf(), scan_opts());
         assert!(res.photos.is_empty());
     }
 
     #[test]
-    fn scan_async_respects_gitignore_and_hidden() {
+    fn scan_respects_gitignore_and_hidden() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sub = dir.path().join("sub");
         fs::create_dir(&sub).expect("mkdir");
@@ -242,7 +218,7 @@ mod tests {
         fs::create_dir(sub.join(".hidden")).expect("mkdir");
         fs::write(sub.join(".hidden").join("c.jpg"), b"x").expect("write");
 
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 1));
+        let res = scan_blocking(dir.path().to_path_buf(), scan_opts());
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
         assert_eq!(names, vec!["b.jpg"]);
 
@@ -250,13 +226,13 @@ mod tests {
             respect_gitignore: false,
             skip_hidden: false,
         };
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), no_opts, 2));
+        let res = scan_blocking(dir.path().to_path_buf(), no_opts);
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
         assert_eq!(names, vec!["a.png", "b.jpg", "c.jpg"]);
     }
 
     #[test]
-    fn scan_async_always_skips_git_dir() {
+    fn scan_always_skips_git_dir() {
         let dir = tempfile::tempdir().expect("tempdir");
         let git = dir.path().join(".git");
         fs::create_dir(&git).expect("mkdir");
@@ -265,7 +241,7 @@ mod tests {
             respect_gitignore: false,
             skip_hidden: false,
         };
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), no_opts, 1));
+        let res = scan_blocking(dir.path().to_path_buf(), no_opts);
         assert!(res.photos.is_empty());
     }
 

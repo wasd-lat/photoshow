@@ -1,47 +1,61 @@
-//! Faixa de thumbnails: worker único com fila + cache de texturas.
+//! Faixa de thumbnails: worker único com fila + cache reativo de `ImageHandle`.
 //!
 //! O worker decodifica (com correção EXIF) para no máximo [`THUMB_MAX`] px;
-//! `update()` deve ser chamado todo frame: enfileira a janela ao redor da
-//! seleção, drena prontos criando texturas e despeja os distantes.
+//! [`ThumbCache::poll`] drena os prontos e publica num `State` — que é o que
+//! agenda o re-render da galeria (no egui isso era `request_repaint`).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use crate::prelude::*;
+
 use crate::exif::{apply_orientation, read_orientation};
+use crate::image_store::image_handle;
 
 /// Maior lado do thumbnail.
 pub const THUMB_MAX: u32 = 160;
 /// Janela ao redor da seleção mantida em cache/enfileirada.
 const THUMB_RADIUS: usize = 25;
-/// Teto de texturas; além disso, despeja fora da janela.
+/// Teto de handles; além disso, despeja fora da janela.
 const THUMB_CAP: usize = 200;
-/// Novos jobs por frame (não sufocar a UI).
+/// Novos jobs por poll (não sufocar a UI).
 const JOBS_PER_FRAME: usize = 12;
+
+/// Mapa de thumbs prontos (reativo).
+pub type ThumbMap = HashMap<PathBuf, ImageHandle>;
 
 struct ThumbMsg {
     path: PathBuf,
-    result: Option<(egui::ColorImage, (u32, u32))>,
+    result: Option<ImageHandle>,
 }
 
-fn decode_thumb(path: &PathBuf) -> Option<(egui::ColorImage, (u32, u32))> {
+fn decode_thumb(path: &PathBuf) -> Option<ImageHandle> {
     let raw = image::ImageReader::open(path).ok()?.decode().ok()?;
     let oriented = apply_orientation(raw, read_orientation(path));
     let thumb = oriented.thumbnail(THUMB_MAX, THUMB_MAX);
-    let rgba = thumb.to_rgba8();
-    let (w, h) = (rgba.width(), rgba.height());
-    let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw());
-    Some((color, (w, h)))
+    image_handle(&thumb)
+}
+
+struct Inner {
+    tx: Sender<PathBuf>,
+    rx: Receiver<ThumbMsg>,
+    queued: HashSet<PathBuf>,
+    failed: HashSet<PathBuf>,
 }
 
 /// Cache de thumbnails com worker em background.
-pub struct ThumbCache {
-    tx: Sender<PathBuf>,
-    rx: Receiver<ThumbMsg>,
-    cache: HashMap<PathBuf, egui::TextureHandle>,
-    queued: HashSet<PathBuf>,
-    failed: HashSet<PathBuf>,
-    seq: u64,
+///
+/// `Clone` compartilha o mesmo estado (usado via contexto Freya).
+#[derive(Clone)]
+pub struct ThumbCache(Rc<RefCell<Inner>>);
+
+impl Default for ThumbCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ThumbCache {
@@ -58,107 +72,109 @@ impl ThumbCache {
                 }
             }
         });
-        Self {
+        Self(Rc::new(RefCell::new(Inner {
             tx,
             rx: res_rx,
-            cache: HashMap::new(),
             queued: HashSet::new(),
             failed: HashSet::new(),
-            seq: 0,
-        }
+        })))
     }
 
-    /// Textura pronta, se houver.
-    #[must_use]
-    pub fn get(&self, path: &std::path::Path) -> Option<&egui::TextureHandle> {
-        self.cache.get(path)
-    }
-
-    /// Atualiza fila + drena prontos + despeja distantes.
-    /// Só pede repaint quando há trabalho (fila) ou progresso (resultado).
+    /// Enfileira candidatos, drena prontos e publica em `cache`.
+    ///
     /// Candidatos ordenados por tamanho do arquivo: thumbs de JPGs pequenos
     /// aparecem primeiro; TIFFs gigantes resolvem por último sem bloquear.
-    pub fn update(
-        &mut self,
-        ctx: &egui::Context,
+    /// Devolve `true` se o `State` mudou.
+    pub fn poll(
+        &self,
         visible: &[crate::fs_browser::PhotoPath],
         sel: Option<usize>,
-    ) {
+        cache: State<ThumbMap>,
+    ) -> bool {
+        let mut cache = cache;
         let Some(center) = sel.filter(|_| !visible.is_empty()) else {
-            return;
+            return false;
         };
         let (lo, hi) = window_range(visible.len(), center, THUMB_RADIUS);
+        let mut changed = false;
+        let mut batch: Vec<(PathBuf, Option<ImageHandle>)> = Vec::new();
 
-        let mut candidates: Vec<PathBuf> = visible[lo..=hi]
-            .iter()
-            .map(|p| p.path().to_path_buf())
-            .filter(|p| {
-                !self.cache.contains_key(p) && !self.failed.contains(p) && !self.queued.contains(p)
-            })
-            .collect();
-        // Baratos primeiro (metadados; falha = por último).
-        candidates.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(u64::MAX));
-        let mut sent = 0;
-        for path in candidates.into_iter().take(JOBS_PER_FRAME) {
-            if !self.queued.insert(path.clone()) {
-                continue;
-            }
-            if self.tx.send(path).is_err() {
-                break;
-            }
-            sent += 1;
-        }
-
-        let mut received = 0;
-        while let Ok(msg) = self.rx.try_recv() {
-            received += 1;
-            self.queued.remove(&msg.path);
-            match msg.result {
-                Some((color, _)) => {
-                    self.seq += 1;
-                    let tex = ctx.load_texture(
-                        format!("thumb-{}-{}", self.seq, msg.path.display()),
-                        color,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    self.cache.insert(msg.path, tex);
-                }
-                None => {
-                    self.failed.insert(msg.path);
-                }
-            }
-        }
-
-        if self.cache.len() > THUMB_CAP {
-            let keep: HashSet<PathBuf> = visible[lo..=hi]
+        {
+            let mut inner = self.0.borrow_mut();
+            let mut candidates: Vec<PathBuf> = visible[lo..=hi]
                 .iter()
                 .map(|p| p.path().to_path_buf())
+                .filter(|p| {
+                    !cache.peek().contains_key(p)
+                        && !inner.failed.contains(p)
+                        && !inner.queued.contains(p)
+                })
                 .collect();
-            self.cache.retain(|p, _| keep.contains(p));
-            self.failed.retain(|p| keep.contains(p));
+            // Baratos primeiro (metadados; falha = por último).
+            candidates.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(u64::MAX));
+            for path in candidates.into_iter().take(JOBS_PER_FRAME) {
+                if !inner.queued.insert(path.clone()) {
+                    continue;
+                }
+                if inner.tx.send(path).is_err() {
+                    inner.queued.clear();
+                    break;
+                }
+                changed = true;
+            }
+            while let Ok(msg) = inner.rx.try_recv() {
+                changed = true;
+                inner.queued.remove(&msg.path);
+                batch.push((msg.path, msg.result));
+            }
         }
-        if sent > 0 || received > 0 || !self.queued.is_empty() {
-            ctx.request_repaint();
+
+        if !batch.is_empty() {
+            let mut map = cache.write();
+            for (path, handle) in batch {
+                match handle {
+                    Some(h) => {
+                        map.insert(path, h);
+                    }
+                    None => {
+                        map.remove(&path);
+                        self.0.borrow_mut().failed.insert(path);
+                    }
+                }
+            }
+            if map.len() > THUMB_CAP {
+                let keep: HashSet<PathBuf> = visible[lo..=hi]
+                    .iter()
+                    .map(|p| p.path().to_path_buf())
+                    .collect();
+                map.retain(|p, _| keep.contains(p));
+                self.0.borrow_mut().failed.retain(|p| keep.contains(p));
+            }
         }
+        changed
+    }
+
+    /// Há job enviado e ainda sem resposta?
+    ///
+    /// O pump usa isto para acordar o próximo frame: a fila só é drenada no
+    /// render da raiz, então sem o pulso as miniaturas ficariam paradas.
+    #[must_use]
+    pub fn in_flight(&self) -> bool {
+        !self.0.borrow().queued.is_empty()
     }
 
     /// Esquece uma foto (ex.: após sobrescrever o arquivo).
-    pub fn invalidate(&mut self, path: &std::path::Path) {
-        self.cache.remove(path);
-        self.failed.remove(path);
+    pub fn invalidate(&self, path: &std::path::Path) {
+        self.0.borrow_mut().failed.remove(path);
     }
 
-    /// Limpa tudo (troca de pasta/arquivos).
-    pub fn clear(&mut self) {
-        self.cache.clear();
-        self.queued.clear();
-        self.failed.clear();
-    }
-}
-
-impl Default for ThumbCache {
-    fn default() -> Self {
-        Self::new()
+    /// Limpa fila e falhas (troca de pasta/arquivos).
+    ///
+    /// O `State` é limpo pelo chamador: aqui só cuidamos do não reativo.
+    pub fn clear(&self) {
+        let mut inner = self.0.borrow_mut();
+        inner.queued.clear();
+        inner.failed.clear();
     }
 }
 

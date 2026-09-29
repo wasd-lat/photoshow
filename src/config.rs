@@ -40,7 +40,7 @@ pub struct AppConfig {
     /// Exibe pastas ocultas (dotfiles) na árvore de navegação.
     #[serde(default)]
     pub show_hidden_folders: bool,
-    /// Tema visual (slate, charcoal, frost, paper).
+    /// Tema visual (ver `crate::theme::THEMES`).
     #[serde(default = "default_theme")]
     pub theme: String,
     /// Lado do thumbnail da galeria em px (48..=192).
@@ -68,8 +68,9 @@ fn default_thumb_size() -> f32 {
     88.0
 }
 
-/// Temas visuais disponíveis (egui-elegance).
-pub const THEMES: &[&str] = &["slate", "charcoal", "frost", "paper"];
+/// Reexport dos temas visuais (implementados em `crate::theme`).
+#[allow(unused_imports)]
+pub use crate::theme::THEMES;
 
 impl Default for AppConfig {
     fn default() -> Self {

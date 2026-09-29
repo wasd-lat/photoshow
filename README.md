@@ -1,6 +1,6 @@
 # photoshow
 
-Visualizador de fotos rápido em Rust ([egui](https://github.com/emilk/egui)):
+Visualizador de fotos rápido em Rust ([Freya](https://github.com/marc2332/freya)):
 abra pastas ou arquivos soltos, navegue, edite e salve — sem travar,
 sem banco de dados, sem nuvem.
 
@@ -20,7 +20,7 @@ sem banco de dados, sem nuvem.
   instantâneo; Salvar sobrescreve (com confirmação) ou Salvar como…
 - **Produtividade** — menu Arquivo único, botão direito (copiar
   caminho/imagem, abrir, mostrar na pasta), renomear (`F2`), atalhos
-  de teclado, painéis redimensionáveis em dock, temas claro/escuro,
+  de teclado, painéis redimensionáveis, temas claro/escuro,
   qualidade JPEG e prefetch configuráveis
 
 ## Atalhos
@@ -49,7 +49,6 @@ Por distribuição (na página de [releases](https://github.com/raillen/photosho
 |---|---|
 | Debian/Ubuntu | `photoshow_*_amd64.deb` (`sudo dpkg -i`) |
 | Fedora/openSUSE | `photoshow-*.x86_64.rpm` (`sudo rpm -i` / `dnf install`) |
-| Arch | `dist/arch/PKGBUILD` ([instruções](./dist/README.md)) |
 | Windows | `photoshow-*-x86_64-pc-windows-msvc.zip` (só extrair o `.exe`) |
 | Qualquer Linux | tarball + `install.sh` acima |
 
@@ -66,6 +65,28 @@ cargo run --release
 Tudo em `~/.config/photoshow/config.json`: favoritas, última pasta,
 tema, qualidade JPEG, prefetch, comportamento da varredura. Editável
 pelo menu Config dentro do app.
+
+## Arquitetura
+
+| Módulo | Responsabilidade |
+|---|---|
+| `src/app/mod.rs` | raiz da aplicação, dock e composição dos painéis |
+| `src/app/state.rs` | estado global (Freya Radio) e transições |
+| `src/app/services.rs` | scan, save e o pump que drena as threads de decode |
+| `src/app/shortcuts.rs` | atalhos globais de teclado |
+| `src/app/viewer.rs` | zoom, pan, crop e menu de contexto |
+| `src/app/browser.rs` | favoritas, árvore de pastas e lista virtualizada |
+| `src/app/gallery.rs` | grade de miniaturas |
+| `src/app/dialogs.rs` | modais de renomear e configurações |
+| `src/image_store.rs` | decode em background → `ImageHandle` (sem GUI) |
+| `src/thumbs.rs` | fila de miniaturas |
+| `src/editor.rs` | pilha de edição não-destrutiva (puro) |
+| `src/fs_browser.rs` | varredura e renomear (puro) |
+| `src/exif.rs` | orientação EXIF (puro) |
+| `src/theme.rs` | temas Freya (slate, charcoal, frost, paper) |
+
+O domínio (`editor`, `exif`, `fs_browser`, `config`) não conhece a GUI
+e é testado sem janela.
 
 ## Desenvolvimento
 
