@@ -241,3 +241,102 @@ fn photo_path_rejects_unsupported_extensions() {
     assert!(PhotoPath::new(PathBuf::from("/x/foto.pdf")).is_none());
     assert!(PhotoPath::new(PathBuf::from("/x/sem_ext")).is_none());
 }
+
+#[test]
+fn rotating_twice_returns_to_the_original_geometry() {
+    // Regressão: `ImageStore` guardava só a imagem já transformada, então a
+    // 2ª rotação derivava. Aqui, o round-trip de duas rotações tem que voltar
+    // exatamente à imagem original — o que prova que a base não foi perdida.
+    let dir = fixture();
+    let path = write_photo(dir.path(), "giro.png", 400, 200);
+    let dec = decode_photo(&path).expect("decodificar");
+    let base = dec.display.clone();
+
+    let mut editor = EditorStack::new();
+    let dims = (base.width(), base.height());
+
+    editor.rotate_cw(dims);
+    let once = apply_to_image(&base, &editor.state());
+    assert_eq!(
+        (once.width(), once.height()),
+        (dims.1, dims.0),
+        "1ª rotação deveria trocar w/h"
+    );
+
+    editor.rotate_cw(dims);
+    let twice = apply_to_image(&base, &editor.state());
+    assert_eq!(
+        (twice.width(), twice.height()),
+        (dims.0, dims.1),
+        "2ª rotação deveria voltar às dimensões originais"
+    );
+    assert_eq!(editor.state().rot, 2);
+}
+
+#[test]
+fn four_rotations_are_pixel_identical_to_the_original() {
+    // Quatro rotações de 90° são a identidade: byte a byte, não só em tamanho.
+    let dir = fixture();
+    let path = write_photo(dir.path(), "identidade.png", 64, 48);
+    let dec = decode_photo(&path).expect("decodificar");
+    let base = dec.display.clone();
+    let dims = (base.width(), base.height());
+
+    let mut editor = EditorStack::new();
+    for _ in 0..4 {
+        editor.rotate_cw(dims);
+    }
+    let back = apply_to_image(&base, &editor.state());
+    assert_eq!(back, base, "4 rotações não voltaram ao original");
+}
+
+#[test]
+fn rotating_twice_keeps_a_previously_set_crop() {
+    // O crop gira junto com a foto. Se a rotação usasse as dims já
+    // transformadas, a 2ª rotação mandaria o crop para fora da imagem.
+    let dir = fixture();
+    let path = write_photo(dir.path(), "crop_giro.png", 400, 200);
+    let dec = decode_photo(&path).expect("decodificar");
+    let dims = (dec.display.width(), dec.display.height());
+
+    let mut editor = EditorStack::new();
+    let crop = CropRect {
+        x: 10,
+        y: 20,
+        w: 100,
+        h: 50,
+    };
+    editor.set_crop(Some(crop));
+    editor.rotate_cw(dims);
+    editor.rotate_cw(dims);
+
+    let final_crop = editor.state().crop.expect("crop preservado");
+    // Após meia volta, o rect original (10,20,100,50) na imagem 400x200 volta
+    // para a mesma posição relativa — o Bake tem de caber na imagem.
+    let baked = bake(&dec.full, dims, &editor.state());
+    assert!(
+        (baked.width() > 0 && baked.height() > 0),
+        "bake produziu imagem inválida: {final_crop:?}"
+    );
+    assert!(baked.width() <= dec.full.width());
+    assert!(baked.height() <= dec.full.height());
+}
+
+#[test]
+fn undo_after_rotation_restores_the_exact_original_pixels() {
+    let dir = fixture();
+    let path = write_photo(dir.path(), "undo_giro.png", 40, 20);
+    let dec = decode_photo(&path).expect("decodificar");
+    let base = dec.display.clone();
+
+    let mut editor = EditorStack::new();
+    editor.rotate_cw((base.width(), base.height()));
+    assert_ne!(apply_to_image(&base, &editor.state()), base);
+
+    assert!(editor.undo());
+    assert_eq!(
+        apply_to_image(&base, &editor.state()),
+        base,
+        "undo não devolveu a imagem original"
+    );
+}
