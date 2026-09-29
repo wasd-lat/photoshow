@@ -74,19 +74,28 @@ pelo menu Config dentro do app.
 | `src/app/state.rs` | estado global (Freya Radio) e transições |
 | `src/app/services.rs` | scan, save e o pump que drena as threads de decode |
 | `src/app/shortcuts.rs` | atalhos globais de teclado |
+| `src/app/toolbar.rs` | menu Arquivo, ferramentas de edição e filtro de formato |
+| `src/app/statusbar.rs` | posição, mensagens e dimensões |
 | `src/app/viewer.rs` | zoom, pan, crop e menu de contexto |
 | `src/app/browser.rs` | favoritas, árvore de pastas e lista virtualizada |
 | `src/app/gallery.rs` | grade de miniaturas |
+| `src/app/crop.rs` | geometria do recorte (puro) |
 | `src/app/dialogs.rs` | modais de renomear e configurações |
+| `src/app/clipboard.rs` | copiar caminho/imagem |
+| `src/app/window.rs` | window state (maximizar, fullscreen) |
 | `src/image_store.rs` | decode em background → `ImageHandle` (sem GUI) |
 | `src/thumbs.rs` | fila de miniaturas |
 | `src/editor.rs` | pilha de edição não-destrutiva (puro) |
 | `src/fs_browser.rs` | varredura e renomear (puro) |
 | `src/exif.rs` | orientação EXIF (puro) |
+| `src/config.rs` | preferências persistidas (puro) |
 | `src/theme.rs` | temas Freya (slate, charcoal, frost, paper) |
 
 O domínio (`editor`, `exif`, `fs_browser`, `config`) não conhece a GUI
-e é testado sem janela.
+e é testado sem janela. `src/lib.rs` guarda os módulos e `src/main.rs`
+só faz o `launch`, o que deixa `tests/pipeline.rs` testar o caminho
+inteiro (varredura → decode → edição → bake → gravação → releitura)
+sem abrir janela.
 
 ## Desenvolvimento
 
