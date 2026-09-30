@@ -21,6 +21,20 @@ const PUMP_TICK_FAST: Duration = Duration::from_millis(16);
 /// num resultado que ninguém está esperando é imperceptível.
 const PUMP_TICK_IDLE: Duration = Duration::from_millis(125);
 
+/// Sobe uma task de **longa duração** (diálogo nativo, scan, gravação).
+///
+/// Usa `spawn_forever` e não `spawn` de propósito: `spawn` amarra a task ao
+/// escopo do componente cujo handler a criou, e o Freya cancela as tasks do
+/// escopo quando ele desmonta. Como os itens de menu fecham o menu no mesmo
+/// clique (`open.set(false)`), uma task escopada morria junto com a lista e o
+/// diálogo nativo nunca aparecia — nenhum botão de "abrir" fazia nada.
+///
+/// Regra do app: **todo trabalho que sobrevive ao clique usa [`background`]**.
+/// `spawn` fica só para trabalho que pode ser descartado com o componente.
+pub fn background(future: impl Future<Output = ()> + 'static) -> TaskHandle {
+    spawn_forever(future)
+}
+
 /// Comando que a toolbar envia para o visualizador.
 ///
 /// O rect de crop é estado local do viewer (só o gesto o produz), mas o botão
@@ -105,7 +119,7 @@ impl Services {
         let this = self.clone();
         let mut wake = self.thumb_wake;
         let mut wake_gen = 0u64;
-        spawn(async move {
+        background(async move {
             loop {
                 let decoding = this.images.poll(this.load);
                 // O worker de miniaturas roda numa thread solta e não pode
@@ -153,7 +167,7 @@ impl Services {
     pub fn start_scan(&self, dir: PathBuf, opts: fs_browser::ScanOptions, seq: u64) {
         let this = self.clone();
         let mut this = this;
-        spawn(async move {
+        background(async move {
             let result = thread(move || fs_browser::scan_blocking(dir, opts)).await;
             this.scan.set(Some(ScanOutcome { seq, result }));
         });
@@ -190,7 +204,7 @@ impl Services {
     ) {
         let this = self.clone();
         let mut this = this;
-        spawn(async move {
+        background(async move {
             let outcome = thread(move || {
                 let baked = bake(&full, display_base, &edit);
                 match save_baked(&baked, &dest, jpeg_quality) {

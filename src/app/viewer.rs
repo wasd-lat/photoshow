@@ -10,6 +10,7 @@ use crate::ui;
 use super::crop::{self, DragKind2};
 use super::services::{CropCommand, Services};
 use super::state::{self, AppChannel, channel};
+use super::toolbar;
 
 /// Cor do overlay de crop (fora da seleção).
 const DIM: Color = Color::from_argb(140, 0, 0, 0);
@@ -75,9 +76,7 @@ impl Component for Viewer {
         }
 
         let body: Element = match &load {
-            LoadState::Empty => {
-                placeholder(&m, "Nenhuma foto — abra uma pasta ou fixe uma favorita.")
-            }
+            LoadState::Empty => empty_view(&m, &services),
             LoadState::Loading => rect()
                 .expanded()
                 .center()
@@ -450,12 +449,58 @@ fn restore_button(m: &ui::Metrics) -> impl IntoElement {
         )
 }
 
-/// Mensagem central quando não há foto.
-fn placeholder(m: &ui::Metrics, text: &'static str) -> Element {
+/// Estado vazio: mensagem **e** os dois botões de abrir.
+///
+/// A mensagem sozinha não resolvia nada: o menu Arquivo é um dropdown pequeno
+/// no canto superior, e sem ação visível aqui a primeira impressão era "não
+/// abre pasta nenhuma".
+fn empty_view(m: &ui::Metrics, services: &Services) -> Element {
+    let open_folder = {
+        let services = services.clone();
+        move |_| toolbar::open_folder_dialog(services.clone())
+    };
+    let open_files = {
+        let services = services.clone();
+        move |_| toolbar::open_files_dialog(services.clone())
+    };
+
     rect()
         .expanded()
         .center()
-        .child(ui::text(m, ui::Role::Body, DIM_TEXT, text))
+        .child(
+            rect()
+                .vertical()
+                .cross_align(Alignment::Center)
+                .spacing(m.gap(2.))
+                .child(ui::text(m, ui::Role::Body, DIM_TEXT, "Nenhuma foto aberta"))
+                .child(
+                    rect()
+                        .horizontal()
+                        .spacing(m.gap(1.5))
+                        .child(
+                            Button::new().flat().on_press(open_folder).child(
+                                rect()
+                                    .horizontal()
+                                    .cross_align(Alignment::Center)
+                                    .spacing(m.gap(1.5))
+                                    .padding(ui::gaps(m, 1., 2.))
+                                    .child(ui::svg(m, "folder"))
+                                    .child(ui::text(m, ui::Role::Body, INVERSE, "Abrir pasta…")),
+                            ),
+                        )
+                        .child(
+                            Button::new().flat().on_press(open_files).child(
+                                rect()
+                                    .horizontal()
+                                    .cross_align(Alignment::Center)
+                                    .spacing(m.gap(1.5))
+                                    .padding(ui::gaps(m, 1., 2.))
+                                    .child(ui::svg(m, "file-image"))
+                                    .child(ui::text(m, ui::Role::Body, INVERSE, "Abrir arquivos…")),
+                            ),
+                        ),
+                ),
+        )
         .into_element()
 }
 

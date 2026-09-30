@@ -5,7 +5,7 @@ use freya::components::{Button, Select, Tooltip, TooltipContainer};
 use crate::prelude::*;
 use crate::ui;
 
-use super::services::{CropCommand, Services};
+use super::services::{CropCommand, Services, background};
 use super::state::{self, AppChannel, AppState, channel};
 use super::window;
 
@@ -24,12 +24,15 @@ impl Component for Toolbar {
         let edit = channel(AppChannel::Edit);
         let mut viewer = channel(AppChannel::Viewer);
         let status = channel(AppChannel::Status);
-        let mut dialogs = channel(AppChannel::Dialogs);
+        let cfg = channel(AppChannel::Config).read().config.clone();
+
+        let p = crate::theme::palette(&cfg.theme);
+        let text_color = p.text_primary.to_color();
 
         let has_photo = photos.read().current.is_some();
         let dirty = edit.read().editor.is_dirty();
         let saving = status.read().saving;
-        let m = ui::Metrics::new(channel(AppChannel::Config).read().config.ui_scale);
+        let m = ui::Metrics::new(cfg.ui_scale);
 
         rect()
             .width(Size::fill())
@@ -49,10 +52,19 @@ impl Component for Toolbar {
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .spacing(m.gap(1.5))
-                    .child(file_menu(&m, photos, edit, services.clone(), dirty, saving))
+                    .child(file_menu(
+                        &m,
+                        &p,
+                        photos,
+                        edit,
+                        services.clone(),
+                        dirty,
+                        saving,
+                    ))
                     .maybe(has_photo, |el| {
                         el.child(vrule(&m)).child(edit_bar(
                             &m,
+                            text_color,
                             edit,
                             viewer,
                             services.clone(),
@@ -65,7 +77,7 @@ impl Component for Toolbar {
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .spacing(m.gap(1.5))
-                    .child(format_filter(&m, photos, services.clone()))
+                    .child(format_filter(&m, text_color, photos, services.clone()))
                     .child(ui::icon_button(
                         &m,
                         "panel-left",
@@ -103,7 +115,7 @@ impl Component for Toolbar {
                         "settings",
                         "Configurações",
                         Button::new().flat().on_press(move |_| {
-                            dialogs.write().settings_open = true;
+                            state::update(AppChannel::Dialogs, |st| st.settings_open = true);
                         }),
                     )),
             )
@@ -121,6 +133,7 @@ fn vrule(m: &ui::Metrics) -> impl IntoElement {
 /// Botão com ícone + rótulo, embrulhado em tooltip.
 fn tool_button(
     m: &ui::Metrics,
+    text_color: Color,
     name: &str,
     text: &'static str,
     tip: &'static str,
@@ -136,21 +149,18 @@ fn tool_button(
                     .cross_align(Alignment::Center)
                     .spacing(m.gap(1.5))
                     .child(ui::svg(m, name))
-                    .child(ui::text(m, ui::Role::Body, TEXT, text)),
+                    .child(ui::text(m, ui::Role::Body, text_color, text)),
             ),
     )
 }
 
-/// Cor do texto padrão da barra (o tema é sempre escuro na barra).
-const TEXT: Color = Color::from_rgb(240, 240, 243);
-
 /// Menu Arquivo: abrir, salvar, salvar como, renomear, restaurar layout.
 ///
-/// Usa [`ui::Dropdown`] em vez do `Menu` do Freya: o `Menu` entra no fluxo de
-/// layout e empurra a barra inteira para baixo quando abre — o que fazia o
-/// clique acertar o item errado e "Abrir pasta…" não abrir nada.
+/// Usa [`ui::Dropdown`] ancorado fora do fluxo: não empurra a barra de ferramentas
+/// e fecha ao clicar fora ou pressionar Escape.
 fn file_menu(
     m: &ui::Metrics,
+    palette: &crate::theme::Palette,
     photos: Radio<AppState, AppChannel>,
     edit: Radio<AppState, AppChannel>,
     services: Services,
@@ -158,60 +168,123 @@ fn file_menu(
     saving: bool,
 ) -> impl IntoElement {
     let mut open = use_state(|| false);
+    let text_color = palette.text_primary.to_color();
 
-    let open_folder: Press = {
+    let open_folder = {
         let services = services.clone();
-        move |_| open_folder_dialog(services.clone())
-    }
-    .into();
-    let open_files: Press = {
+        let mut open = open;
+        move |_| {
+            open.set(false);
+            open_folder_dialog(services.clone());
+        }
+    };
+    let open_files = {
         let services = services.clone();
-        move |_| open_files_dialog(services.clone())
-    }
-    .into();
-    let do_save: Press = {
+        let mut open = open;
+        move |_| {
+            open.set(false);
+            open_files_dialog(services.clone());
+        }
+    };
+    let do_save = {
         let services = services.clone();
-        move |_| save_overwrite(services.clone(), photos, edit)
-    }
-    .into();
-    let do_save_as: Press = {
+        let mut open = open;
+        move |_| {
+            open.set(false);
+            save_overwrite(services.clone(), photos, edit);
+        }
+    };
+    let do_save_as = {
         let services = services.clone();
-        move |_| save_as_dialog(services.clone(), photos, edit)
-    }
-    .into();
-    let do_rename: Press = (move |_| state::update(AppChannel::Dialogs, state::open_rename)).into();
-    let do_restore: Press = (move |_| {
-        state::update(AppChannel::Viewer, |st| st.maximized = false);
-        state::update(AppChannel::Config, |st| {
-            st.config.hide_browser = false;
-            st.config.hide_gallery = false;
-            st.config.save().ok();
-        });
-        state::update(AppChannel::Status, |st| {
-            st.status = String::from("Layout padrão restaurado.");
-        });
-    })
-    .into();
+        let mut open = open;
+        move |_| {
+            open.set(false);
+            save_as_dialog(services.clone(), photos, edit);
+        }
+    };
+    let do_rename = {
+        let mut open = open;
+        move |_| {
+            open.set(false);
+            state::update(AppChannel::Dialogs, state::open_rename);
+        }
+    };
+    let do_restore = {
+        let mut open = open;
+        move |_| {
+            open.set(false);
+            state::update(AppChannel::Viewer, |st| st.maximized = false);
+            state::update(AppChannel::Config, |st| {
+                st.config.hide_browser = false;
+                st.config.hide_gallery = false;
+                st.config.save().ok();
+            });
+            state::update(AppChannel::Status, |st| {
+                st.status = String::from("Layout padrão restaurado.");
+            });
+        }
+    };
 
-    // Só os *itens* vão para o Dropdown: ele monta o `Menu` em volta. Passar
-    // um `Menu` pronto aqui embrulharia menu em menu, e o menu interno
-    // ( Layer::Overlay, sem itens clicáveis no lugar certo) engole o externo.
+    let border_color = palette.border.to_color();
+    let surface_color = palette.surface_primary.to_color();
+
     let items = rect()
-        .width(Size::fill())
-        .child(menu_entry(m, "folder", "Abrir pasta…", open_folder))
-        .child(menu_entry(m, "file-image", "Abrir arquivos…", open_files))
-        .child(menu_divider(m))
+        .width(Size::px((210.0f32 * m.scale()).clamp(180.0f32, 260.0f32)))
+        .background(surface_color)
+        .border(Border::new().width(1.).fill(border_color))
+        .corner_radius(m.radius())
+        .shadow(
+            Shadow::new()
+                .blur(14.)
+                .color(Color::from_argb(80, 0, 0, 0))
+                .y(4.),
+        )
+        .padding(ui::gaps(m, 1., 1.))
+        .spacing(m.gap(0.5))
+        .child(menu_entry(
+            m,
+            text_color,
+            "folder",
+            "Abrir pasta…",
+            open_folder,
+        ))
+        .child(menu_entry(
+            m,
+            text_color,
+            "file-image",
+            "Abrir arquivos…",
+            open_files,
+        ))
+        .child(menu_divider(m, border_color))
         .maybe(dirty && !saving, |el| {
-            el.child(menu_entry(m, "save", "Salvar", do_save))
+            el.child(menu_entry(m, text_color, "save", "Salvar", do_save))
         })
         .maybe(!saving, |el| {
-            el.child(menu_entry(m, "save", "Salvar como…", do_save_as))
+            el.child(menu_entry(
+                m,
+                text_color,
+                "save",
+                "Salvar como…",
+                do_save_as,
+            ))
         })
         .maybe(!saving, |el| {
-            el.child(menu_entry(m, "pencil", "Renomear… (F2)", do_rename))
+            el.child(menu_entry(
+                m,
+                text_color,
+                "pencil",
+                "Renomear… (F2)",
+                do_rename,
+            ))
         })
-        .child(menu_divider(m))
-        .child(menu_entry(m, "grid-2x2", "Restaurar layout", do_restore));
+        .child(menu_divider(m, border_color))
+        .child(menu_entry(
+            m,
+            text_color,
+            "grid-2x2",
+            "Restaurar layout",
+            do_restore,
+        ));
 
     let trigger = Button::new()
         .flat()
@@ -224,7 +297,7 @@ fn file_menu(
                 .cross_align(Alignment::Center)
                 .spacing(m.gap(1.5))
                 .child(ui::svg(m, "folder"))
-                .child(ui::text(m, ui::Role::Body, TEXT, "Arquivo")),
+                .child(ui::text(m, ui::Role::Body, text_color, "Arquivo")),
         );
 
     let close: EventHandler<()> = (move |_| open.set(false)).into();
@@ -232,51 +305,44 @@ fn file_menu(
     ui::Dropdown::new(open(), trigger, items, close)
 }
 
-/// Item de menu com ícone.
-///
-/// Cada item é um alvo de clique do tamanho inteiro do item — o `MenuItem` do
-/// Freya só dá clique no texto, e um item de menu clicável só no glifo é
-/// exatamente o tipo de coisa que faz "Abrir pasta…" parecer quebrado.
+/// Item de menu com ícone e texto.
 fn menu_entry(
     m: &ui::Metrics,
+    text_color: Color,
     name: &str,
     text: &'static str,
-    on_press: Press,
+    on_press: impl Into<EventHandler<Event<PressEventData>>>,
 ) -> impl IntoElement {
-    let press: EventHandler<Event<PressEventData>> = on_press;
-    TooltipContainer::new(Tooltip::new_text(text)).child(
-        Button::new()
-            .flat()
-            .expanded()
-            // Alvo de clique alto, via padding (o `Button` do Freya não tem
-            // `min_height`); 1.0 vertical já dá ~26px, acima do mínimo de 24.
-            .padding(ui::gaps(m, 1., 2.))
-            .corner_radius(m.radius_sm())
-            .on_press(press)
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .spacing(m.gap(2.))
-                    .child(ui::svg(m, name))
-                    .child(ui::text(m, ui::Role::Body, TEXT, text)),
-            ),
-    )
+    Button::new()
+        .flat()
+        .expanded()
+        .padding(ui::gaps(m, 1., 2.))
+        .corner_radius(m.radius_sm())
+        .on_press(on_press)
+        .child(
+            rect()
+                .width(Size::fill())
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(m.gap(2.))
+                .child(ui::svg(m, name))
+                .child(ui::text(m, ui::Role::Body, text_color, text)),
+        )
 }
 
 /// Linha divisória dentro do menu.
-fn menu_divider(m: &ui::Metrics) -> impl IntoElement {
+fn menu_divider(m: &ui::Metrics, color: Color) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .height(Size::px(1.))
-        .padding(m.gap(1.))
-        .background(Color::from_argb(70, 128, 128, 136))
+        .padding(m.gap(0.5))
+        .background(color)
 }
 
 /// Ferramentas de edição: rotate, crop, proporção, undo/redo, reset.
 fn edit_bar(
     m: &ui::Metrics,
+    text_color: Color,
     edit: Radio<AppState, AppChannel>,
     viewer: Radio<AppState, AppChannel>,
     services: Services,
@@ -294,6 +360,7 @@ fn edit_bar(
         .spacing(m.gap(1.))
         .child(tool_button(
             m,
+            text_color,
             "rotate-ccw",
             "90°",
             "Rotacionar anti-horário",
@@ -308,6 +375,7 @@ fn edit_bar(
         ))
         .child(tool_button(
             m,
+            text_color,
             "rotate-cw",
             "90°",
             "Rotacionar horário",
@@ -323,6 +391,7 @@ fn edit_bar(
         .child(vrule(m))
         .child(tool_button(
             m,
+            text_color,
             "crop",
             if crop_mode { "Crop… (ativo)" } else { "Crop" },
             "Arraste para recortar, alças redimensionam, Enter aplica",
@@ -340,6 +409,7 @@ fn edit_bar(
         .maybe(crop_mode, |el| {
             el.child(tool_button(
                 m,
+                text_color,
                 "check",
                 "Aplicar",
                 "Aplica o recorte (Enter)",
@@ -392,7 +462,7 @@ fn edit_bar(
                         });
                     }
                 })
-                .child(ui::text(m, ui::Role::Body, TEXT, "Reset")),
+                .child(ui::text(m, ui::Role::Body, text_color, "Reset")),
         )
         .maybe(dirty, |el| {
             // Ponto em vez de "• editado": ~10px em vez de ~60, e o texto
@@ -436,6 +506,7 @@ fn aspect_select(viewer: Radio<AppState, AppChannel>, services: Services) -> imp
 /// Dropdown de filtro de formato.
 fn format_filter(
     m: &ui::Metrics,
+    text_color: Color,
     photos: Radio<AppState, AppChannel>,
     services: Services,
 ) -> impl IntoElement {
@@ -449,7 +520,7 @@ fn format_filter(
         .horizontal()
         .cross_align(Alignment::Center)
         .spacing(m.gap(1.5))
-        .child(ui::text(m, ui::Role::Body, TEXT, "Formato:"))
+        .child(ui::text(m, ui::Role::Body, text_color, "Formato:"))
         .child(Select::new().selected_item(current).children(
             state::FORMAT_FILTERS.iter().enumerate().map(|(i, name)| {
                 let on_press: Press = {
@@ -471,20 +542,23 @@ fn format_filter(
 }
 
 /// Diálogo nativo de pasta (roda fora da thread de UI).
-fn open_folder_dialog(services: Services) {
-    spawn(async move {
+pub fn open_folder_dialog(services: Services) {
+    // `background` (task da raiz), e não `spawn`: o menu que disparou isto é
+    // desmontado no mesmo clique (`open.set(false)`) e uma task escopada seria
+    // cancelada junto — o diálogo nunca chegaria a aparecer.
+    background(async move {
         let picked = thread(|| rfd::FileDialog::new().pick_folder()).await;
-        if let Some(dir) = picked {
-            state::update(AppChannel::Photos, |st| {
-                state::open_dir_path(&services, st, dir);
-            });
-        }
+        let Some(dir) = picked else { return };
+        crate::cli::open_target(&services, crate::cli::Target::Folder(dir));
     });
 }
 
-/// Diálogo nativo de arquivos soltos.
-fn open_files_dialog(services: Services) {
-    spawn(async move {
+/// Diálogo nativo de arquivos.
+///
+/// Um arquivo só abre a pasta dele com a foto já selecionada (é o que o
+/// usuário espera de "Abrir arquivos…"); vários viram lista solta.
+pub fn open_files_dialog(services: Services) {
+    background(async move {
         let files = thread(|| {
             rfd::FileDialog::new()
                 .add_filter(
@@ -495,19 +569,30 @@ fn open_files_dialog(services: Services) {
         })
         .await
         .unwrap_or_default();
-        let photos = crate::fs_browser::filter_loose_files(files);
-        if photos.is_empty() {
-            state::update(AppChannel::Status, |st| {
-                st.status = String::from("Nenhuma imagem válida selecionada.");
-            });
+        if files.is_empty() {
+            return; // cancelado: não é erro
+        }
+        if files.len() == 1 {
+            let Some(target) = crate::cli::resolve(&files) else {
+                no_valid_image();
+                return;
+            };
+            crate::cli::open_target(&services, target);
             return;
         }
-        state::update(AppChannel::Photos, |st| {
-            st.status = format!("{} arquivos soltos", photos.len());
-            st.tree = None;
-            st.current_dir = None;
-            state::replace_photos(st, &services, photos);
-        });
+        let photos = crate::fs_browser::filter_loose_files(files);
+        if photos.is_empty() {
+            no_valid_image();
+            return;
+        }
+        crate::cli::open_target(&services, crate::cli::Target::Files(photos));
+    });
+}
+
+/// Aviso na status bar: o usuário escolheu algo que não é imagem.
+fn no_valid_image() {
+    state::update(AppChannel::Status, |st| {
+        st.status = String::from("Nenhuma imagem válida selecionada.");
     });
 }
 
@@ -548,7 +633,7 @@ fn save_overwrite(
     let editor_state = edit.read().editor.state();
     let config = state::snapshot().config;
 
-    spawn(async move {
+    background(async move {
         if config.confirm_overwrite {
             let name = dest
                 .file_name()
@@ -588,7 +673,7 @@ fn save_as_dialog(
         .map(|c| c.display_name())
         .unwrap_or_else(|| String::from("foto.png"));
 
-    spawn(async move {
+    background(async move {
         let (Some(full), Some(base)) = (full, base) else {
             state::update(AppChannel::Status, |st| {
                 st.status = String::from("Nada para salvar.");

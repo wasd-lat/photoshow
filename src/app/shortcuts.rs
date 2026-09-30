@@ -3,6 +3,8 @@
 //! Mesmos atalhos do egui: `←/→` navegam, `+ - 0` zoomam, `F2` renomeia,
 //! `Ctrl+Z / Ctrl+Y` desfaz/refaz, `Enter` aplica crop, `F9` maximiza o
 //! visualizador, `F11` fullscreen e `Esc` sai de fullscreen/crop.
+//! `Ctrl+O` abre arquivos e `Ctrl+Shift+O` abre pasta — o mesmo par de
+//! comandos que qualquer visualizador de fotos usa.
 //!
 //! O `keyboard-types` separa o que é *tecla nomeada* (`NamedKey`) do que é
 //! *posição física* (`Code`): `Z`, `+` e `0` chegam como `Code`, e é isso que
@@ -15,7 +17,7 @@ use crate::prelude::*;
 
 use super::services::{CropCommand, Services};
 use super::state::{self, AppChannel};
-use super::window;
+use super::{toolbar, window};
 
 /// Acesso aos serviços sem hook (dentro de handler).
 #[must_use]
@@ -40,6 +42,16 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
     // Teclas nomeadas: função, setas, Escape, Enter.
     if let Key::Named(named) = &e.key {
         return named_shortcut(*named, services);
+    }
+
+    // Abrir: Ctrl+O (arquivos) e Ctrl+Shift+O (pasta).
+    if ctrl && code == Code::KeyO {
+        if shift {
+            toolbar::open_folder_dialog(services.clone());
+        } else {
+            toolbar::open_files_dialog(services.clone());
+        }
+        return true;
     }
 
     // Painéis: Ctrl+1 / Ctrl+2 recolhem navegador e galeria.

@@ -17,7 +17,7 @@
 //! quebrou "Abrir pasta…" e o star de favorito. Aqui o menu sai do fluxo com
 //! `Position::Absolute` + `offset_*`, ancorado na área medida do gatilho.
 
-use freya::components::{Button, Menu, SvgViewer, Tooltip, TooltipContainer};
+use freya::components::{Button, SvgViewer, Tooltip, TooltipContainer};
 use freya::elements::label::Label;
 
 use crate::icons;
@@ -241,8 +241,10 @@ pub struct Dropdown {
 impl Dropdown {
     /// Monta o dropdown.
     ///
-    /// `items` são os **itens**, não um `Menu`: este componente monta o `Menu`
-    /// em volta deles (é quem sabe fechar no clique fora e no Esc).
+    /// Posiciona o conteúdo em coordenadas globais de tela (`Position::Global`),
+    /// ancorado exatamente abaixo do gatilho, sem empurrar a barra de ferramentas
+    /// nem entrar no fluxo normal de layout. Um backdrop transparente invisível
+    /// captura qualquer clique fora do menu para fechá-lo.
     #[must_use]
     pub fn new(
         open: bool,
@@ -261,48 +263,56 @@ impl Dropdown {
 
 impl Component for Dropdown {
     fn render(&self) -> impl IntoElement {
-        // Hooks no topo, sempre: `open` muda de frame para frame.
-        let host = use_state(ScreenRect::default);
         let trigger = use_state(ScreenRect::default);
 
-        // Só desenha o menu depois de medir o gatilho; senão o primeiro frame
-        // abriria em (0,0).
-        let (dx, dy) = {
-            let h = host.peek();
-            let t = trigger.peek();
-            if h.width() <= 0.0 || t.width() <= 0.0 {
-                (0.0, 0.0)
-            } else {
-                (t.min_x() - h.min_x(), t.max_y() - h.min_y())
-            }
-        };
-        let ready = self.open && dx != 0.0;
+        let t = *trigger.read();
+        let ready = self.open && t.width() > 0.0 && t.height() > 0.0;
         let on_close_menu = self.on_close.clone();
         let items = self.items.clone();
+
         rect()
             .on_sized({
-                let mut host = host;
-                move |e: Event<SizedEventData>| host.set_if_modified(e.area)
+                let mut trigger = trigger;
+                move |e: Event<SizedEventData>| trigger.set_if_modified(e.area)
             })
-            .child(
-                rect()
-                    .on_sized({
-                        let mut trigger = trigger;
-                        move |e: Event<SizedEventData>| trigger.set_if_modified(e.area)
-                    })
-                    .child(self.trigger.clone()),
-            )
+            .child(self.trigger.clone())
             .maybe(ready, |el| {
                 el.child(
                     rect()
-                        // Fora do fluxo: o pai não muda de tamanho.
-                        .position(Position::new_absolute().left(0.).top(0.))
-                        .offset_x(dx)
-                        .offset_y(dy)
                         .layer(Layer::Overlay)
-                        // `Menu` por fora dos itens: é ele que trata
-                        // clique-fora e Esc.
-                        .child(Menu::new().on_close(on_close_menu).child(items)),
+                        .position(Position::new_global().left(0.).top(0.))
+                        .width(Size::window_percent(100.))
+                        .height(Size::window_percent(100.))
+                        .on_global_key_down({
+                            let on_close = on_close_menu.clone();
+                            move |e: Event<KeyboardEventData>| {
+                                if e.key == Key::Named(NamedKey::Escape) {
+                                    on_close.call(());
+                                }
+                            }
+                        })
+                        // Backdrop invisível em tela cheia: clique fora fecha o menu
+                        .child(
+                            rect()
+                                .position(Position::new_global().left(0.).top(0.))
+                                .width(Size::window_percent(100.))
+                                .height(Size::window_percent(100.))
+                                .on_pointer_down({
+                                    let on_close = on_close_menu.clone();
+                                    move |_| on_close.call(())
+                                }),
+                        )
+                        // O menu em si, ancorado na borda inferior do gatilho
+                        .child(
+                            rect()
+                                .position(
+                                    Position::new_global().left(t.min_x()).top(t.max_y() + 2.),
+                                )
+                                .on_pointer_down(move |e: Event<PointerEventData>| {
+                                    e.stop_propagation();
+                                })
+                                .child(items),
+                        ),
                 )
             })
     }

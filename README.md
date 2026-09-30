@@ -27,6 +27,8 @@ sem banco de dados, sem nuvem.
 
 | Tecla | Ação |
 |---|---|
+| `Ctrl+O` | abrir arquivos |
+| `Ctrl+Shift+O` | abrir pasta |
 | `←` `→` | foto anterior / próxima |
 | `+` `-` `0` | zoom + / − / ajustar |
 | `F2` | renomear |
@@ -89,6 +91,7 @@ pelo menu Config dentro do app.
 | `src/fs_browser.rs` | varredura e renomear (puro) |
 | `src/exif.rs` | orientação EXIF (puro) |
 | `src/config.rs` | preferências persistidas (puro) |
+| `src/cli.rs` | o que abrir a partir de caminhos externos (puro + efeito) |
 | `src/theme.rs` | temas Freya (slate, charcoal, frost, paper) |
 | `src/ui.rs` | design system: métricas, primitivas e o dropdown ancorado |
 
@@ -105,12 +108,26 @@ produto mora lá — quando algo é regra de negócio, vai para `config.rs` (com
 teste) ou `state.rs` (função pura), e a troca de toolkit não leva a decisão
 junto.
 
+### Task de background: `services::background`, nunca `spawn`
+
+No Freya, `spawn` amarra a task ao **escopo do componente** cujo handler a
+criou, e o runner cancela as tasks do escopo quando ele desmonta. Todo item
+do menu Arquivo fecha o menu no mesmo clique, então uma task escopada morria
+junto com a lista e o diálogo nativo nunca aparecia — nenhum botão de "abrir"
+fazia nada.
+
+Por isso todo trabalho que precisa sobreviver ao clique (diálogo nativo,
+varredura, gravação) sobe por `services::background`, que é `spawn_forever`
+(task da raiz). `tests/menu_task.rs` cobre isso com o `Dropdown` real e um
+clique de verdade.
+
 ### Atalhos
 
 | | |
 |---|---|
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+0` | recolher navegador / galeria / restaurar |
 | `Ctrl+=` / `Ctrl+-` | tamanho do texto (75%–140%) |
+| `Ctrl+O` / `Ctrl+Shift+O` | abrir arquivos / abrir pasta |
 | `←` `→` | foto anterior / próxima |
 | `+` `-` `0` | zoom in / out / ajustar |
 | arraste | pan (quando a imagem passa da viewport) |

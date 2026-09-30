@@ -25,6 +25,9 @@ open = "5"
 
 [dev-dependencies]
 tempfile = "3"
+# Headless GUI tests: `freya_testing::launch_test` monta a janela real sem
+# display, o que é a única forma de testar hit-testing e ciclo de vida de task.
+freya-testing = "0.5.0-rc.7"
 
 [profile.release]
 opt-level = 3

@@ -360,6 +360,31 @@ pub fn open_dir_path(services: &Services, state: &mut AppState, dir: PathBuf) {
     start_scan(services, state, dir, None);
 }
 
+/// Define a pasta raiz e seleciona uma foto específica de imediato.
+pub fn open_dir_and_select(
+    services: &Services,
+    state: &mut AppState,
+    dir: PathBuf,
+    target: PathBuf,
+) {
+    let show_hidden = state.config.show_hidden_folders;
+    let mut root = DirNode::new(dir.clone());
+    root.expanded = true;
+    root.children = Some(child_dirs(&dir, show_hidden));
+    state.tree = Some(root);
+    state.current_dir = Some(dir.clone());
+    state.config.last_folder = Some(dir.clone());
+
+    if target.is_file()
+        && let Some(single) = PhotoPath::new(target.clone())
+    {
+        replace_photos(state, services, vec![single.clone()]);
+        select_photo(state, services, 0, single);
+    }
+
+    start_scan(services, state, dir, Some(target));
+}
+
 /// Carrega as fotos de uma subpasta escolhida na árvore.
 pub fn open_subdir(services: &Services, state: &mut AppState, dir: &Path) {
     state.current_dir = Some(dir.to_path_buf());

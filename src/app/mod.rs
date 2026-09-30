@@ -17,6 +17,9 @@ pub mod toolbar;
 pub mod viewer;
 pub mod window;
 
+use std::path::PathBuf;
+use std::sync::Mutex;
+
 use crate::prelude::*;
 use freya::radio::use_init_radio_station;
 
@@ -25,6 +28,19 @@ use crate::theme;
 
 use services::Services;
 use state::{AppChannel, AppState, channel};
+
+/// Caminhos do `argv`, injetados por [`set_startup_paths`] antes do `launch`.
+///
+/// Sem isto, `photoshow ~/Imagens` (e o "Abrir com" do gerenciador, que usa
+/// `Exec=photoshow %F`) abria uma janela vazia: o app não recebia o `argv`.
+static STARTUP_PATHS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Publica os caminhos a abrir no arranque. Chamar antes de `launch`.
+pub fn set_startup_paths(paths: Vec<PathBuf>) {
+    if let Ok(mut slot) = STARTUP_PATHS.lock() {
+        *slot = paths;
+    }
+}
 
 /// Raiz da aplicação.
 pub fn app() -> impl IntoElement {
@@ -36,11 +52,13 @@ pub fn app() -> impl IntoElement {
     let services = use_hook(Services::new);
     use_provide_context(|| services.clone());
 
-    // Reabre a última pasta para navegação imediata.
-    let startup = channel(AppChannel::Photos).read().current_dir.clone();
-    if startup.is_none() {
-        reopen_last_folder(&services);
-    }
+    // `argv` tem prioridade sobre a última pasta, e vale só no primeiro frame.
+    // `use_hook` (e não um `if` no render) para o `render` da raiz manter a
+    // mesma contagem de hooks em todo frame.
+    use_hook({
+        let services = services.clone();
+        move || open_startup_paths(&services)
+    });
 
     // Um frame pode encontrar resultados de threads que terminaram antes dele.
     services.subscribe_results();
@@ -166,6 +184,20 @@ fn only(child: impl IntoElement) -> Element {
         .direction(Direction::Horizontal)
         .panel(ResizablePanel::new(PanelSize::percent(100.)).child(child))
         .into_element()
+}
+
+/// Decide o que abrir no primeiro frame, uma única vez.
+///
+/// Ordem: caminhos do `argv` → última pasta salva (se a opção estiver ligada).
+/// Consome a lista para não repetir no próximo frame.
+fn open_startup_paths(services: &Services) {
+    let requested: Vec<PathBuf> = match STARTUP_PATHS.lock() {
+        Ok(mut slot) => slot.drain(..).collect(),
+        Err(poisoned) => poisoned.into_inner().drain(..).collect(),
+    };
+    if !crate::cli::open_paths(services, &requested) {
+        reopen_last_folder(services);
+    }
 }
 
 /// Reabre a última pasta salva, se a opção estiver ligada.

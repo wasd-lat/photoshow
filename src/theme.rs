@@ -20,6 +20,14 @@ impl From<Rgb> for Color {
     }
 }
 
+impl Rgb {
+    /// Converte para [`Color`] do Freya.
+    #[must_use]
+    pub fn to_color(self) -> Color {
+        self.into()
+    }
+}
+
 /// Paleta de um tema: so as cores que o photoshow sobrescreve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
