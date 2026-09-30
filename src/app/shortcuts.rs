@@ -55,12 +55,21 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
     }
 
     // Painéis: Ctrl+1 / Ctrl+2 recolhem navegador e galeria.
+    // Ctrl+Shift+1 / Ctrl+Shift+2 recolhem árvore e lista de fotos.
     if ctrl && code == Code::Digit1 {
-        toggle_panel(Panel::Browser);
+        if shift {
+            toggle_panel(Panel::Tree);
+        } else {
+            toggle_panel(Panel::Browser);
+        }
         return true;
     }
     if ctrl && code == Code::Digit2 {
-        toggle_panel(Panel::Gallery);
+        if shift {
+            toggle_panel(Panel::Photos);
+        } else {
+            toggle_panel(Panel::Gallery);
+        }
         return true;
     }
     if ctrl && code == Code::Digit0 {
@@ -158,10 +167,14 @@ fn named_shortcut(key: NamedKey, services: Services) -> bool {
 /// Painel recolhível da janela principal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
-    /// Navegador lateral.
+    /// Navegador lateral (inteiro).
     Browser,
     /// Galeria inferior.
     Gallery,
+    /// Árvore de pastas/favoritas (topo do navegador).
+    Tree,
+    /// Lista de fotos (baixo do navegador).
+    Photos,
 }
 
 /// Recolhe/expande um painel e persiste (função pura de decisão).
@@ -177,6 +190,8 @@ pub fn toggle_panel(panel: Panel) {
     state::update(AppChannel::Config, |st| match panel {
         Panel::Browser => st.config.hide_browser = next_visibility(st.config.hide_browser),
         Panel::Gallery => st.config.hide_gallery = next_visibility(st.config.hide_gallery),
+        Panel::Tree => st.config.hide_tree = next_visibility(st.config.hide_tree),
+        Panel::Photos => st.config.hide_photos = next_visibility(st.config.hide_photos),
     });
     state::update(AppChannel::Config, |st| {
         st.config.save().ok();
@@ -188,6 +203,8 @@ pub fn restore_panels() {
     state::update(AppChannel::Config, |st| {
         st.config.hide_browser = false;
         st.config.hide_gallery = false;
+        st.config.hide_tree = false;
+        st.config.hide_photos = false;
         st.config.save().ok();
     });
 }

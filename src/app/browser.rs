@@ -1,7 +1,10 @@
 //! Painel esquerdo: favoritas, árvore de pastas e lista de fotos.
 
 use crate::prelude::*;
-use freya::components::{Button, ScrollView, VirtualItem, VirtualScrollView};
+use freya::components::{
+    Button, PanelSize, ResizableContainer, ResizablePanel, ScrollView, VirtualItem,
+    VirtualScrollView,
+};
 use freya::radio::Radio;
 
 use crate::fs_browser::PhotoPath;
@@ -31,79 +34,119 @@ impl Component for Browser {
         let m = ui::Metrics::new(config.read().config.ui_scale);
         let favorites = config.read().config.favorites.clone();
         let scanning = status.read().scanning.is_some();
+        let hide_tree = config.read().config.hide_tree;
+        let hide_photos = config.read().config.hide_photos;
         // A altura da linha deriva da tipografia: com fonte maior, uma altura
         // fixa faria o texto vazar para a linha de baixo.
         let row = row_height(&m);
 
-        rect()
+        // Árvore (favoritas + pasta atual) — pode ser recolhida independentemente.
+        let tree_section = rect().width(Size::fill()).child(
+            ScrollView::new()
+                .width(Size::fill())
+                .height(Size::fill())
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .padding(ui::gaps(&m, 2., 2.))
+                        .spacing(m.gap(1.5))
+                        .child(ui::section(&m, "Favoritas"))
+                        .maybe(favorites.is_empty(), |el| {
+                            el.child(ui::faint(&m, "Nenhuma pasta fixada."))
+                        })
+                        .children(
+                            favorites
+                                .into_iter()
+                                .map(|dir| favorite_row(&m, dir, photos, services.clone())),
+                        ),
+                )
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .padding(ui::gaps(&m, 2., 2.))
+                        .spacing(m.gap(1.5))
+                        .child(ui::section(&m, "Pasta atual"))
+                        .maybe(snapshot.tree.is_none(), |el| {
+                            el.child(ui::faint(&m, "Nenhuma pasta aberta."))
+                        })
+                        .maybe_child(snapshot.tree.clone().map(|root| {
+                            current_folder(&m, root, photos, config, services.clone())
+                        })),
+                ),
+        );
+
+        // Lista de fotos — pode ser recolhida independentemente.
+        let photos_section = rect()
             .width(Size::fill())
-            .expanded()
             .vertical()
-            // Mesma armadilha do dock: `fill` no eixo principal come tudo que
-            // sobra depois dele. Árvore e lista se dividem por `flex`.
-            .content(Content::flex())
-            .child(
-                ScrollView::new()
-                    .width(Size::fill())
-                    .height(Size::flex(TREE_PERCENT))
-                    .child(
-                        rect()
-                            .width(Size::fill())
-                            .padding(ui::gaps(&m, 2., 2.))
-                            .spacing(m.gap(1.5))
-                            .child(ui::section(&m, "Favoritas"))
-                            .maybe(favorites.is_empty(), |el| {
-                                el.child(ui::faint(&m, "Nenhuma pasta fixada."))
-                            })
-                            .children(
-                                favorites
-                                    .into_iter()
-                                    .map(|dir| favorite_row(&m, dir, photos, services.clone())),
-                            ),
-                    )
-                    .child(
-                        rect()
-                            .width(Size::fill())
-                            .padding(ui::gaps(&m, 2., 2.))
-                            .spacing(m.gap(1.5))
-                            .child(ui::section(&m, "Pasta atual"))
-                            .maybe(snapshot.tree.is_none(), |el| {
-                                el.child(ui::faint(&m, "Nenhuma pasta aberta."))
-                            })
-                            .maybe_child(snapshot.tree.clone().map(|root| {
-                                current_folder(&m, root, photos, config, services.clone())
-                            })),
-                    ),
-            )
+            .padding(ui::gaps(&m, 2., 2.))
+            .spacing(m.gap(1.))
             .child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::flex(100. - TREE_PERCENT))
-                    .vertical()
-                    .padding(ui::gaps(&m, 2., 2.))
-                    .spacing(m.gap(1.))
-                    .child(
-                        rect()
-                            .width(Size::fill())
-                            .horizontal()
-                            .cross_align(Alignment::Center)
-                            .spacing(m.gap(1.5))
-                            .child(ui::text(
-                                &m,
-                                ui::Role::Small,
-                                Color::from_argb(190, 140, 140, 148),
-                                format!("Fotos ({})", snapshot.visible.len()),
-                            ))
-                            .maybe(scanning, |el| el.child(ui::faint(&m, "varrendo…"))),
-                    )
-                    .child(photo_list(
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(m.gap(1.5))
+                    .child(ui::text(
                         &m,
-                        row,
-                        snapshot.visible,
-                        snapshot.sel,
-                        services,
-                    )),
+                        ui::Role::Small,
+                        Color::from_argb(190, 140, 140, 148),
+                        format!("Fotos ({})", snapshot.visible.len()),
+                    ))
+                    .maybe(scanning, |el| el.child(ui::faint(&m, "varrendo…"))),
             )
+            .child(photo_list(
+                &m,
+                row,
+                snapshot.visible,
+                snapshot.sel,
+                services,
+            ));
+
+        rect().width(Size::fill()).expanded().child({
+            // Se ambas recolhidas, não mostra nada (evita alça vazia).
+            if hide_tree && hide_photos {
+                rect()
+                    .width(Size::fill())
+                    .height(Size::fill())
+                    .into_element()
+            } else if hide_tree {
+                // Só lista de fotos.
+                ResizableContainer::new()
+                    .direction(Direction::Vertical)
+                    .panel(
+                        ResizablePanel::new(PanelSize::percent(100.))
+                            .min_size(20.)
+                            .child(photos_section),
+                    )
+                    .into_element()
+            } else if hide_photos {
+                // Só árvore.
+                ResizableContainer::new()
+                    .direction(Direction::Vertical)
+                    .panel(
+                        ResizablePanel::new(PanelSize::percent(100.))
+                            .min_size(20.)
+                            .child(tree_section),
+                    )
+                    .into_element()
+            } else {
+                // Ambas visíveis: divisível.
+                ResizableContainer::new()
+                    .direction(Direction::Vertical)
+                    .panel(
+                        ResizablePanel::new(PanelSize::percent(TREE_PERCENT))
+                            .min_size(8.)
+                            .child(tree_section),
+                    )
+                    .panel(
+                        ResizablePanel::new(PanelSize::percent(100. - TREE_PERCENT))
+                            .min_size(8.)
+                            .child(photos_section),
+                    )
+                    .into_element()
+            }
+        })
     }
 }
 

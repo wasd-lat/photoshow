@@ -55,6 +55,12 @@ pub struct AppConfig {
     /// Recolhe a galeria inferior (Ctrl+2).
     #[serde(default)]
     pub hide_gallery: bool,
+    /// Recolhe a árvore de pastas/favoritas (lado esquerdo, topo).
+    #[serde(default)]
+    pub hide_tree: bool,
+    /// Recolhe a lista de fotos (lado esquerdo, baixo).
+    #[serde(default)]
+    pub hide_photos: bool,
     /// Contorno de foco sempre visível nos botões.
     #[serde(default)]
     pub always_focus_ring: bool,
@@ -106,6 +112,8 @@ impl Default for AppConfig {
             ui_scale: 1.0,
             hide_browser: false,
             hide_gallery: false,
+            hide_tree: false,
+            hide_photos: false,
             always_focus_ring: false,
         }
     }
@@ -216,6 +224,8 @@ mod tests {
         assert_eq!(cfg.ui_scale, 1.0);
         assert!(!cfg.hide_browser);
         assert!(!cfg.hide_gallery);
+        assert!(!cfg.hide_tree);
+        assert!(!cfg.hide_photos);
         assert_eq!(cfg.jpeg_quality, 80);
     }
 

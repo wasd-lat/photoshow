@@ -80,12 +80,22 @@ pub fn open_target(services: &Services, target: Target) {
         Target::Selection { dir, photo } => state::update(AppChannel::Photos, |st| {
             state::open_dir_and_select(services, st, dir, photo);
         }),
-        Target::Files(photos) => state::update(AppChannel::Photos, |st| {
-            st.tree = None;
-            st.current_dir = None;
-            st.status = format!("{} arquivos soltos", photos.len());
-            state::replace_photos(st, services, photos);
-        }),
+        Target::Files(photos) => {
+            state::update(AppChannel::Photos, |st| {
+                st.tree = None;
+                st.current_dir = None;
+                st.status = format!("{} arquivos soltos", photos.len());
+                state::replace_photos(st, services, photos);
+            });
+            // Arquivos soltos não têm árvore de pastas: recolhe navegação e galeria.
+            state::update(AppChannel::Config, |st| {
+                st.config.hide_browser = true;
+                st.config.hide_gallery = true;
+                st.config.hide_tree = true;
+                st.config.hide_photos = true;
+                st.config.save().ok();
+            });
+        }
     }
 }
 

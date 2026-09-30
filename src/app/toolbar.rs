@@ -102,6 +102,28 @@ impl Component for Toolbar {
                     ))
                     .child(ui::icon_button(
                         &m,
+                        "chevron-up",
+                        "Ocultar/mostrar árvore (Ctrl+Shift+1)",
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Config, |st| {
+                                st.config.hide_tree = !st.config.hide_tree;
+                                st.config.save().ok();
+                            })
+                        }),
+                    ))
+                    .child(ui::icon_button(
+                        &m,
+                        "chevron-down",
+                        "Ocultar/mostrar lista (Ctrl+Shift+2)",
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Config, |st| {
+                                st.config.hide_photos = !st.config.hide_photos;
+                                st.config.save().ok();
+                            })
+                        }),
+                    ))
+                    .child(ui::icon_button(
+                        &m,
                         "fullscreen",
                         "Fullscreen (F11)",
                         Button::new().flat().on_press(move |_| {
@@ -217,6 +239,8 @@ fn file_menu(
             state::update(AppChannel::Config, |st| {
                 st.config.hide_browser = false;
                 st.config.hide_gallery = false;
+                st.config.hide_tree = false;
+                st.config.hide_photos = false;
                 st.config.save().ok();
             });
             state::update(AppChannel::Status, |st| {
