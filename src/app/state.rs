@@ -230,6 +230,22 @@ pub fn update(c: AppChannel, f: impl FnOnce(&mut AppState)) {
     f(&mut guard);
 }
 
+/// Escreve num canal a partir de uma task de background (`spawn_forever`).
+///
+/// Tasks de background rodam no escopo `ROOT`, que é ancestral do escopo onde
+/// o `RadioStation` é provido (`use_init_radio_station` no `app`): um
+/// [`station`] dentro da task não encontra o contexto e aborta com
+/// "Context <RadioStation<..>> was not found". Por isso o handler captura a
+/// estação (que é `Copy`) antes do `background(...)` e a move para a task.
+pub fn update_on(
+    mut station: RadioStation<AppState, AppChannel>,
+    c: AppChannel,
+    f: impl FnOnce(&mut AppState),
+) {
+    let mut guard = station.write_channel(c);
+    f(&mut guard);
+}
+
 // --- Predicados de UI ---
 
 /// Foto passa no filtro de formato? Grupos: JPG=jpg+jpeg, TIFF=tiff+tif.

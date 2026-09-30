@@ -1,6 +1,6 @@
-//! Temas visuais (Freya) — substituem os temas egui-elegance.
+//! Temas visuais (Freya).
 //!
-//! Os quatro nomes do egui (slate, charcoal, frost, paper) são preservados
+//! Os quatro nomes originais (slate, charcoal, frost, paper) são preservados
 //! para não quebrar configs já gravados. Cada um tem uma [`Palette`] com
 //! dados puros (testável sem janela) e um mapeamento para a `Theme` do Freya.
 
@@ -8,7 +8,18 @@ use crate::prelude::*;
 use freya::components::{ColorsSheet, DARK_COLORS, LIGHT_COLORS, Theme, dark_theme, light_theme};
 
 /// Temas disponíveis (nomes persistidos no config).
-pub const THEMES: &[&str] = &["slate", "charcoal", "frost", "paper"];
+pub const THEMES: &[&str] = &[
+    "slate",
+    "charcoal",
+    "frost",
+    "paper",
+    "tokyo-night",
+    "nord",
+    "zed-light",
+    "zed-dark",
+    "gruvbox",
+    "nyancat",
+];
 
 /// Cor em RGB puro, sem passar pelo `Theme` (para poder testar a palette).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,65 +86,64 @@ pub struct Palette {
 
 // --- Paletas ---
 //
-// Todos os quatro temas são neutros e de baixo contraste: a hierarquia vem de
-// borda de 1px e de espaço em branco, não de sombra nem de cor saturada. O
-// acento é quase preto no claro e quase branco no escuro, como nos apps
-// atuais da OpenAI.
+// Os dois escuros originais se diferenciam pelo matiz (slate é azulado,
+// charcoal é neutro puro) e não só pelo brilho; os claros usam secundário
+// escurecido para o texto de apoio passar em WCAG AA com margem.
 //
-// Nomes preservados do egui-elegance para não invalidar configs já gravados.
+// Nomes originais preservados para não invalidar configs já gravados.
 
-/// Slate: padrão, neutro escuro levemente azulado.
+/// Slate: padrão, escuro azulado (o mais claro dos escuros).
 pub const SLATE: Palette = Palette {
-    primary: Rgb(247, 247, 248),
-    secondary: Rgb(190, 192, 196),
-    tertiary: Rgb(120, 122, 128),
-    background: Rgb(20, 20, 21),
-    surface_primary: Rgb(37, 37, 39),
-    surface_secondary: Rgb(45, 45, 48),
-    surface_tertiary: Rgb(28, 28, 30),
-    surface_inverse: Rgb(13, 13, 14),
-    surface_inverse_secondary: Rgb(40, 40, 42),
-    surface_inverse_tertiary: Rgb(64, 64, 68),
-    border: Rgb(54, 54, 58),
-    border_focus: Rgb(247, 247, 248),
-    text_primary: Rgb(242, 242, 243),
-    text_secondary: Rgb(158, 158, 164),
-    text_placeholder: Rgb(150, 150, 156),
-    text_inverse: Rgb(20, 20, 21),
-    text_highlight: Rgb(247, 247, 248),
-    focus: Rgb(120, 120, 126),
-    active: Rgb(58, 58, 62),
-    disabled: Rgb(78, 78, 82),
+    primary: Rgb(235, 238, 248),
+    secondary: Rgb(170, 176, 196),
+    tertiary: Rgb(120, 130, 155),
+    background: Rgb(33, 38, 54),
+    surface_primary: Rgb(48, 54, 72),
+    surface_secondary: Rgb(58, 65, 86),
+    surface_tertiary: Rgb(26, 30, 42),
+    surface_inverse: Rgb(18, 21, 30),
+    surface_inverse_secondary: Rgb(48, 54, 72),
+    surface_inverse_tertiary: Rgb(72, 79, 102),
+    border: Rgb(72, 79, 102),
+    border_focus: Rgb(235, 238, 248),
+    text_primary: Rgb(236, 238, 245),
+    text_secondary: Rgb(170, 178, 198),
+    text_placeholder: Rgb(155, 163, 185),
+    text_inverse: Rgb(33, 38, 54),
+    text_highlight: Rgb(235, 238, 248),
+    focus: Rgb(120, 130, 160),
+    active: Rgb(58, 65, 86),
+    disabled: Rgb(90, 98, 120),
 };
 
-/// Charcoal: neutro puro, sem viés de cor.
+/// Charcoal: neutro puro, quase preto.
 pub const CHARCOAL: Palette = Palette {
-    primary: Rgb(250, 250, 250),
-    secondary: Rgb(184, 184, 184),
+    primary: Rgb(245, 245, 245),
+    secondary: Rgb(178, 178, 178),
     tertiary: Rgb(112, 112, 112),
-    background: Rgb(18, 18, 18),
-    surface_primary: Rgb(35, 35, 35),
-    surface_secondary: Rgb(44, 44, 44),
-    surface_tertiary: Rgb(26, 26, 26),
-    surface_inverse: Rgb(12, 12, 12),
-    surface_inverse_secondary: Rgb(38, 38, 38),
-    surface_inverse_tertiary: Rgb(62, 62, 62),
-    border: Rgb(52, 52, 52),
-    border_focus: Rgb(250, 250, 250),
+    background: Rgb(15, 15, 15),
+    surface_primary: Rgb(30, 30, 30),
+    surface_secondary: Rgb(40, 40, 40),
+    surface_tertiary: Rgb(22, 22, 22),
+    surface_inverse: Rgb(10, 10, 10),
+    surface_inverse_secondary: Rgb(32, 32, 32),
+    surface_inverse_tertiary: Rgb(58, 58, 58),
+    border: Rgb(48, 48, 48),
+    border_focus: Rgb(245, 245, 245),
     text_primary: Rgb(245, 245, 245),
-    text_secondary: Rgb(160, 160, 160),
-    text_placeholder: Rgb(150, 150, 156),
-    text_inverse: Rgb(18, 18, 18),
-    text_highlight: Rgb(250, 250, 250),
-    focus: Rgb(118, 118, 118),
-    active: Rgb(56, 56, 56),
-    disabled: Rgb(76, 76, 76),
+    text_secondary: Rgb(168, 168, 168),
+    text_placeholder: Rgb(158, 158, 158),
+    text_inverse: Rgb(15, 15, 15),
+    text_highlight: Rgb(245, 245, 245),
+    focus: Rgb(120, 120, 120),
+    active: Rgb(52, 52, 52),
+    disabled: Rgb(80, 80, 80),
 };
 
 /// Frost: claro, quase branco.
 pub const FROST: Palette = Palette {
     primary: Rgb(13, 13, 13),
-    secondary: Rgb(120, 120, 124),
+    secondary: Rgb(110, 110, 116),
     tertiary: Rgb(64, 64, 68),
     background: Rgb(252, 252, 253),
     surface_primary: Rgb(243, 243, 245),
@@ -145,8 +155,8 @@ pub const FROST: Palette = Palette {
     border: Rgb(228, 228, 231),
     border_focus: Rgb(13, 13, 13),
     text_primary: Rgb(16, 16, 18),
-    text_secondary: Rgb(104, 104, 110),
-    text_placeholder: Rgb(104, 104, 110),
+    text_secondary: Rgb(100, 100, 106),
+    text_placeholder: Rgb(100, 100, 106),
     text_inverse: Rgb(252, 252, 253),
     text_highlight: Rgb(13, 13, 13),
     focus: Rgb(150, 150, 154),
@@ -157,7 +167,7 @@ pub const FROST: Palette = Palette {
 /// Paper: claro, levemente quente.
 pub const PAPER: Palette = Palette {
     primary: Rgb(26, 24, 22),
-    secondary: Rgb(126, 122, 116),
+    secondary: Rgb(116, 112, 106),
     tertiary: Rgb(70, 66, 62),
     background: Rgb(251, 250, 248),
     surface_primary: Rgb(243, 241, 238),
@@ -169,13 +179,158 @@ pub const PAPER: Palette = Palette {
     border: Rgb(229, 226, 221),
     border_focus: Rgb(26, 24, 22),
     text_primary: Rgb(24, 22, 20),
-    text_secondary: Rgb(108, 104, 98),
-    text_placeholder: Rgb(106, 102, 96),
+    text_secondary: Rgb(100, 96, 90),
+    text_placeholder: Rgb(100, 96, 90),
     text_inverse: Rgb(251, 250, 248),
     text_highlight: Rgb(26, 24, 22),
     focus: Rgb(154, 150, 144),
     active: Rgb(228, 225, 220),
     disabled: Rgb(198, 195, 190),
+};
+
+/// Tokyo Night: azul profundo com acentos neon (azul, roxo, ciano).
+pub const TOKYO_NIGHT: Palette = Palette {
+    primary: Rgb(122, 162, 247),
+    secondary: Rgb(187, 154, 247),
+    tertiary: Rgb(125, 207, 255),
+    background: Rgb(26, 27, 38),
+    surface_primary: Rgb(36, 40, 59),
+    surface_secondary: Rgb(46, 51, 75),
+    surface_tertiary: Rgb(22, 23, 33),
+    surface_inverse: Rgb(15, 16, 24),
+    surface_inverse_secondary: Rgb(36, 40, 59),
+    surface_inverse_tertiary: Rgb(60, 66, 98),
+    border: Rgb(59, 66, 97),
+    border_focus: Rgb(122, 162, 247),
+    text_primary: Rgb(192, 202, 245),
+    text_secondary: Rgb(169, 177, 214),
+    text_placeholder: Rgb(135, 145, 185),
+    text_inverse: Rgb(26, 27, 38),
+    text_highlight: Rgb(122, 162, 247),
+    focus: Rgb(122, 162, 247),
+    active: Rgb(46, 51, 75),
+    disabled: Rgb(86, 95, 137),
+};
+
+/// Nord: noite polar azul-acinzentada com acentos gelo (frost) e aurora.
+pub const NORD: Palette = Palette {
+    primary: Rgb(136, 192, 208),
+    secondary: Rgb(129, 161, 193),
+    tertiary: Rgb(143, 188, 187),
+    background: Rgb(46, 52, 64),
+    surface_primary: Rgb(59, 66, 82),
+    surface_secondary: Rgb(67, 76, 94),
+    surface_tertiary: Rgb(38, 43, 53),
+    surface_inverse: Rgb(28, 31, 38),
+    surface_inverse_secondary: Rgb(59, 66, 82),
+    surface_inverse_tertiary: Rgb(90, 100, 120),
+    border: Rgb(76, 86, 106),
+    border_focus: Rgb(216, 222, 233),
+    text_primary: Rgb(236, 239, 244),
+    text_secondary: Rgb(216, 222, 233),
+    text_placeholder: Rgb(165, 178, 198),
+    text_inverse: Rgb(46, 52, 64),
+    text_highlight: Rgb(136, 192, 208),
+    focus: Rgb(136, 192, 208),
+    active: Rgb(67, 76, 94),
+    disabled: Rgb(76, 86, 106),
+};
+
+/// Zed Light: claro azulado com acento azul vibrante.
+pub const ZED_LIGHT: Palette = Palette {
+    primary: Rgb(11, 92, 255),
+    secondary: Rgb(70, 110, 180),
+    tertiary: Rgb(120, 90, 170),
+    background: Rgb(247, 247, 245),
+    surface_primary: Rgb(236, 236, 234),
+    surface_secondary: Rgb(228, 228, 226),
+    surface_tertiary: Rgb(252, 252, 251),
+    surface_inverse: Rgb(30, 31, 34),
+    surface_inverse_secondary: Rgb(60, 61, 66),
+    surface_inverse_tertiary: Rgb(100, 101, 108),
+    border: Rgb(220, 220, 218),
+    border_focus: Rgb(11, 92, 255),
+    text_primary: Rgb(28, 29, 33),
+    text_secondary: Rgb(85, 86, 94),
+    text_placeholder: Rgb(105, 106, 115),
+    text_inverse: Rgb(247, 247, 245),
+    text_highlight: Rgb(11, 92, 255),
+    focus: Rgb(11, 92, 255),
+    active: Rgb(220, 222, 228),
+    disabled: Rgb(190, 190, 188),
+};
+
+/// Zed Dark: grafite azulado com acento azul claro.
+pub const ZED_DARK: Palette = Palette {
+    primary: Rgb(96, 150, 255),
+    secondary: Rgb(150, 130, 220),
+    tertiary: Rgb(90, 200, 200),
+    background: Rgb(18, 20, 26),
+    surface_primary: Rgb(30, 32, 40),
+    surface_secondary: Rgb(38, 41, 51),
+    surface_tertiary: Rgb(14, 15, 20),
+    surface_inverse: Rgb(11, 12, 15),
+    surface_inverse_secondary: Rgb(30, 32, 40),
+    surface_inverse_tertiary: Rgb(54, 58, 70),
+    border: Rgb(50, 54, 66),
+    border_focus: Rgb(130, 175, 255),
+    text_primary: Rgb(228, 230, 236),
+    text_secondary: Rgb(158, 164, 180),
+    text_placeholder: Rgb(140, 146, 162),
+    text_inverse: Rgb(18, 20, 26),
+    text_highlight: Rgb(130, 175, 255),
+    focus: Rgb(90, 140, 255),
+    active: Rgb(38, 41, 51),
+    disabled: Rgb(80, 86, 100),
+};
+
+/// Gruvbox: marrom quente retrô com acentos laranja, amarelo e verde.
+pub const GRUVBOX: Palette = Palette {
+    primary: Rgb(254, 128, 25),
+    secondary: Rgb(250, 189, 47),
+    tertiary: Rgb(142, 192, 124),
+    background: Rgb(40, 40, 40),
+    surface_primary: Rgb(60, 56, 54),
+    surface_secondary: Rgb(80, 73, 69),
+    surface_tertiary: Rgb(29, 32, 33),
+    surface_inverse: Rgb(24, 24, 24),
+    surface_inverse_secondary: Rgb(60, 56, 54),
+    surface_inverse_tertiary: Rgb(102, 92, 84),
+    border: Rgb(102, 92, 84),
+    border_focus: Rgb(250, 189, 47),
+    text_primary: Rgb(235, 219, 178),
+    text_secondary: Rgb(213, 196, 161),
+    text_placeholder: Rgb(189, 174, 147),
+    text_inverse: Rgb(40, 40, 40),
+    text_highlight: Rgb(254, 128, 25),
+    focus: Rgb(254, 128, 25),
+    active: Rgb(80, 73, 69),
+    disabled: Rgb(146, 131, 116),
+};
+
+/// Nyancat: extremamente colorido — roxo espacial com rosa, ciano e amarelo
+/// do arco-íris da Nyan Cat.
+pub const NYANCAT: Palette = Palette {
+    primary: Rgb(255, 51, 153),
+    secondary: Rgb(64, 224, 255),
+    tertiary: Rgb(255, 214, 0),
+    background: Rgb(26, 15, 46),
+    surface_primary: Rgb(42, 26, 72),
+    surface_secondary: Rgb(56, 34, 96),
+    surface_tertiary: Rgb(19, 11, 34),
+    surface_inverse: Rgb(13, 7, 24),
+    surface_inverse_secondary: Rgb(42, 26, 72),
+    surface_inverse_tertiary: Rgb(80, 50, 130),
+    border: Rgb(150, 80, 180),
+    border_focus: Rgb(0, 255, 255),
+    text_primary: Rgb(255, 255, 255),
+    text_secondary: Rgb(255, 214, 235),
+    text_placeholder: Rgb(205, 240, 255),
+    text_inverse: Rgb(26, 15, 46),
+    text_highlight: Rgb(255, 214, 0),
+    focus: Rgb(255, 51, 153),
+    active: Rgb(56, 34, 96),
+    disabled: Rgb(130, 110, 150),
 };
 
 /// Paleta pelo nome salvo no config; desconhecido cai em `slate`.
@@ -185,6 +340,12 @@ pub fn palette(name: &str) -> Palette {
         "charcoal" => CHARCOAL,
         "frost" => FROST,
         "paper" => PAPER,
+        "tokyo-night" => TOKYO_NIGHT,
+        "nord" => NORD,
+        "zed-light" => ZED_LIGHT,
+        "zed-dark" => ZED_DARK,
+        "gruvbox" => GRUVBOX,
+        "nyancat" => NYANCAT,
         _ => SLATE,
     }
 }
@@ -192,7 +353,10 @@ pub fn palette(name: &str) -> Palette {
 /// O tema é escuro?
 #[must_use]
 pub fn is_dark(name: &str) -> bool {
-    matches!(name, "slate" | "charcoal" | "")
+    matches!(
+        name,
+        "slate" | "charcoal" | "" | "tokyo-night" | "nord" | "zed-dark" | "gruvbox" | "nyancat"
+    )
 }
 
 /// Constrói a `Theme` do Freya a partir da paleta.
@@ -249,7 +413,7 @@ mod tests {
     #[test]
     fn every_configured_theme_resolves_to_a_named_palette() {
         let known: Vec<Palette> = THEMES.iter().map(|n| palette(n)).collect();
-        assert_eq!(known.len(), 4);
+        assert!(!known.is_empty());
         for (name, p) in THEMES.iter().zip(known) {
             // A paleta de um tema não pode ser a de outro.
             let others: Vec<Palette> = THEMES
@@ -272,7 +436,18 @@ mod tests {
 
     #[test]
     fn palettes_are_pairwise_distinct() {
-        let all = [SLATE, CHARCOAL, FROST, PAPER];
+        let all = [
+            SLATE,
+            CHARCOAL,
+            FROST,
+            PAPER,
+            TOKYO_NIGHT,
+            NORD,
+            ZED_LIGHT,
+            ZED_DARK,
+            GRUVBOX,
+            NYANCAT,
+        ];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "paletas repetidas");
@@ -282,10 +457,12 @@ mod tests {
 
     #[test]
     fn light_and_dark_are_classified() {
-        assert!(is_dark("slate"));
-        assert!(is_dark("charcoal"));
-        assert!(!is_dark("frost"));
-        assert!(!is_dark("paper"));
+        for name in ["slate", "charcoal", "tokyo-night", "nord", "zed-dark", "gruvbox", "nyancat"] {
+            assert!(is_dark(name), "{name} deveria ser escuro");
+        }
+        for name in ["frost", "paper", "zed-light"] {
+            assert!(!is_dark(name), "{name} deveria ser claro");
+        }
         assert!(!is_dark("desconhecido"));
     }
 
@@ -311,12 +488,8 @@ mod tests {
 
     #[test]
     fn body_text_passes_wcag_aa_against_its_background() {
-        for (name, p) in [
-            ("slate", SLATE),
-            ("charcoal", CHARCOAL),
-            ("frost", FROST),
-            ("paper", PAPER),
-        ] {
+        for name in THEMES {
+            let p = palette(name);
             let ratio = contrast(p.text_primary, p.background);
             assert!(
                 ratio >= 4.5,
@@ -327,12 +500,8 @@ mod tests {
 
     #[test]
     fn secondary_text_passes_wcag_aa_against_its_background() {
-        for (name, p) in [
-            ("slate", SLATE),
-            ("charcoal", CHARCOAL),
-            ("frost", FROST),
-            ("paper", PAPER),
-        ] {
+        for name in THEMES {
+            let p = palette(name);
             let ratio = contrast(p.text_secondary, p.background);
             assert!(
                 ratio >= 4.5,
@@ -343,12 +512,8 @@ mod tests {
 
     #[test]
     fn primary_is_distinguishable_from_background() {
-        for (name, p) in [
-            ("slate", SLATE),
-            ("charcoal", CHARCOAL),
-            ("frost", FROST),
-            ("paper", PAPER),
-        ] {
+        for name in THEMES {
+            let p = palette(name);
             let ratio = contrast(p.primary, p.background);
             assert!(
                 ratio >= 3.0,
@@ -363,12 +528,8 @@ mod tests {
         // erro), então passa por WCAG AA igual ao secundário. Num design
         // minimalista ele é o que menos pode sumir: é o que explica o que a
         // tela vazia está esperando.
-        for (name, p) in [
-            ("slate", SLATE),
-            ("charcoal", CHARCOAL),
-            ("frost", FROST),
-            ("paper", PAPER),
-        ] {
+        for name in THEMES {
+            let p = palette(name);
             let ratio = contrast(p.text_placeholder, p.background);
             assert!(
                 ratio >= 4.5,
@@ -381,12 +542,8 @@ mod tests {
     fn borders_are_visible_against_the_background() {
         // Borda de 1px é o que dá a hierarquia no design minimalista: se ela
         // some, a interface fica crua sem nenhum outro recurso.
-        for (name, p) in [
-            ("slate", SLATE),
-            ("charcoal", CHARCOAL),
-            ("frost", FROST),
-            ("paper", PAPER),
-        ] {
+        for name in THEMES {
+            let p = palette(name);
             let ratio = contrast(p.border, p.background);
             assert!(ratio >= 1.15, "{name}: borda/fundo = {ratio:.2} (mín 1.15)");
         }
@@ -395,17 +552,68 @@ mod tests {
     #[test]
     fn accent_text_is_readable_on_the_accent_fill() {
         // Botão primário: fundo = primary, texto = text_inverse.
-        for (name, p) in [
-            ("slate", SLATE),
-            ("charcoal", CHARCOAL),
-            ("frost", FROST),
-            ("paper", PAPER),
-        ] {
+        for name in THEMES {
+            let p = palette(name);
             let ratio = contrast(p.text_inverse, p.primary);
             assert!(
                 ratio >= 4.5,
                 "{name}: texto/botão primário = {ratio:.2} (mín 4.5)"
             );
         }
+    }
+
+    #[test]
+    fn secondary_text_passes_wcag_aa_on_surfaces_too() {
+        // Regressão de legibilidade nos temas claros: o texto de apoio não
+        // vive só sobre o fundo da janela — ele aparece sobre as superfícies
+        // (toolbar, listas, cards). Cinza translúcido sobre branco some.
+        for name in THEMES {
+            let p = palette(name);
+            for (surface, sname) in [
+                (p.surface_primary, "surface_primary"),
+                (p.surface_tertiary, "surface_tertiary"),
+            ] {
+                let ratio = contrast(p.text_secondary, surface);
+                assert!(
+                    ratio >= 4.5,
+                    "{name}: secundário/{sname} = {ratio:.2} (mín 4.5)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dark_themes_are_visually_distinct_from_each_other() {
+        // Regressão: os escuros eram quase idênticos (só brilho). Cada par de
+        // temas escuros precisa diferir no matiz ou no brilho de forma
+        // perceptível — medido pela distância euclidiana no RGB do fundo.
+        let darks = [
+            ("slate", SLATE),
+            ("charcoal", CHARCOAL),
+            ("tokyo-night", TOKYO_NIGHT),
+            ("nord", NORD),
+            ("zed-dark", ZED_DARK),
+            ("gruvbox", GRUVBOX),
+            ("nyancat", NYANCAT),
+        ];
+        for (i, (na, a)) in darks.iter().enumerate() {
+            for (nb, b) in &darks[i + 1..] {
+                let d = dist(a.background, b.background);
+                assert!(
+                    d >= 12.0,
+                    "{na} x {nb}: fundos indistinguíveis (dist {d:.1})"
+                );
+            }
+        }
+    }
+
+    /// Distância euclidiana entre duas cores (0..441).
+    fn dist(a: Rgb, b: Rgb) -> f32 {
+        let (dr, dg, db) = (
+            a.0 as f32 - b.0 as f32,
+            a.1 as f32 - b.1 as f32,
+            a.2 as f32 - b.2 as f32,
+        );
+        (dr * dr + dg * dg + db * db).sqrt()
     }
 }

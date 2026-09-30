@@ -49,23 +49,30 @@ impl Component for Viewer {
 
         // Comandos vindos da toolbar (botão Aplicar / troca de proporção).
         // Consome a caixa (escrita, sem assinar) e usa o handle assinado.
+        // O `read` assina este componente às mudanças da caixa: sem ele, o
+        // "Aplicar" (que só escreve na caixa, sem tocar no radio) nunca
+        // acordaria o viewer e o crop pareceria não funcionar.
         let mut viewer = channel(AppChannel::Viewer);
+        let _ = services.crop_cmd.read();
         if let Some(cmd) = services.take_crop_cmd() {
+            let area_now = *area.read();
             let draw = compute_draw(
-                *area.read(),
+                area_now,
                 services.load.read().display_px(),
                 zoom,
                 offset,
             );
             match cmd {
                 CropCommand::Apply => {
-                    let rect = crop_rect();
+                    let rect = crop_rect().map(|r| crop_to_screen(r, area_now));
                     let dims = services.load.read().display_px();
                     state::apply_crop(&mut viewer.write(), &services, draw, dims, rect);
                 }
                 CropCommand::RefitAspect => {
-                    crop_rect
-                        .set(crop_rect().map(|r| state::refit_crop_to_aspect(r, draw, aspect)));
+                    let draw_local = draw_to_local(draw, area_now);
+                    crop_rect.set(
+                        crop_rect().map(|r| state::refit_crop_to_aspect(r, draw_local, aspect)),
+                    );
                 }
             }
         }
@@ -146,19 +153,20 @@ impl Component for Viewer {
                         };
                         e.prevent_default();
                         let at = e.global_location();
-                        let p = to_local_point(e.data(), *area.read());
+                        let area_now = *area.read();
+                        let p = to_local_point(e.data(), area_now);
                         match kind {
                             crop::DragKind::Pan(last) => {
                                 let delta = to_vector(&at) - to_vector(&last);
                                 state::update(AppChannel::Viewer, |st| {
                                     st.offset =
-                                        clamp_pan(*area.read(), dims, st.zoom, st.offset + delta);
+                                        clamp_pan(area_now, dims, st.zoom, st.offset + delta);
                                 });
                                 drag.set(Some(crop::DragKind::Pan(at)));
                             }
                             crop::DragKind::Crop(inner) => {
-                                let draw = compute_draw(*area.read(), dims, zoom, offset);
-                                update_crop(crop_rect, inner, p, draw, ratio);
+                                let draw = compute_draw(area_now, dims, zoom, offset);
+                                update_crop(crop_rect, inner, p, draw, area_now, ratio);
                             }
                         }
                     }
@@ -333,25 +341,33 @@ fn start_crop(
 }
 
 /// Atualiza o rect de crop conforme o gesto em andamento.
+///
+/// O rect é guardado em coordenadas **locais** (origem no canto da área do
+/// viewer, para o hit-test casar com o ponteiro); o `draw` chega em
+/// coordenadas **de tela**. A interseção e o clamp usam o `draw` convertido
+/// para local — sem isso a seleção nascia deslocada e o "Aplicar" recebia um
+/// rect fora da foto.
 fn update_crop(
     mut crop_rect: State<Option<ScreenRect>>,
     kind: DragKind2,
     p: Point2D,
     draw: ScreenRect,
+    area: ScreenRect,
     ratio: Option<f32>,
 ) {
+    let draw_local = draw_to_local(draw, area);
     let next = match kind {
         DragKind2::New { anchor } | DragKind2::Resize { anchor, .. } => Some(
             crop::enforce_aspect(anchor, p, ratio)
-                .intersection(&draw)
-                .unwrap_or(draw),
+                .intersection(&draw_local)
+                .unwrap_or(draw_local),
         ),
         DragKind2::Move { offset } => crop_rect().map(|r| {
             let size = r.size;
             // Mantém o rect inteiro dentro da área desenhada da foto.
             let min = (p.to_vector() - offset).clamp(
-                draw.min().to_vector(),
-                draw.max().to_vector() - size.to_vector(),
+                draw_local.min().to_vector(),
+                draw_local.max().to_vector() - size.to_vector(),
             );
             ScreenRect::new(min.to_point(), size)
         }),
@@ -414,6 +430,17 @@ pub fn crop_to_screen(rect: ScreenRect, area: ScreenRect) -> ScreenRect {
     ScreenRect::new(
         Point2D::new(rect.min_x() + area.min_x(), rect.min_y() + area.min_y()),
         Size2D::new(rect.width(), rect.height()),
+    )
+}
+
+/// Inverso de [`crop_to_screen`]: traz um rect de tela para o espaço local do
+/// viewer (origem no canto da área). É o que o gesto de crop usa para
+/// intersectar a seleção (local) com o desenho da foto (tela).
+#[must_use]
+pub fn draw_to_local(draw: ScreenRect, area: ScreenRect) -> ScreenRect {
+    ScreenRect::new(
+        Point2D::new(draw.min_x() - area.min_x(), draw.min_y() - area.min_y()),
+        draw.size,
     )
 }
 
@@ -939,5 +966,49 @@ mod tests {
             Some(1.0),
         );
         assert!(zero.width() >= 0.0 && zero.height() >= 0.0);
+    }
+
+    #[test]
+    fn draw_to_local_is_the_inverse_of_crop_to_screen() {
+        // O gesto guarda o crop em local e o desenho vive em tela: as duas
+        // conversões precisam se anular, senão a interseção mistura espaços.
+        let area = stage_at(435., 43., 800., 600.);
+        let draw = compute_draw(area, (400, 300), 1.0, Vector2D::new(0., 0.));
+        let local = draw_to_local(draw, area);
+        // Origem no canto da área, mesmo tamanho.
+        assert!((local.min_x() - (draw.min_x() - 435.)).abs() < 0.01);
+        assert!((local.min_y() - (draw.min_y() - 43.)).abs() < 0.01);
+        assert!((local.width() - draw.width()).abs() < 0.01);
+        assert!((local.height() - draw.height()).abs() < 0.01);
+        // Volta para tela: identidade.
+        let back = crop_to_screen(local, area);
+        assert!((back.min_x() - draw.min_x()).abs() < 0.01);
+        assert!((back.min_y() - draw.min_y()).abs() < 0.01);
+    }
+
+    #[test]
+    fn crop_gesture_in_local_space_matches_draw_in_screen_space() {
+        // Regressão do bug "crop não funciona": o gesto (local) intersectado
+        // com o desenho (tela) sem conversão dava vazio e caía no
+        // `unwrap_or(draw)` — guardando coords de tela como se fossem locais.
+        // Com a conversão, a seleção local cabe no desenho local.
+        let area = stage_at(435., 43., 800., 600.);
+        let dims = (400, 300);
+        let draw = compute_draw(area, dims, 1.0, Vector2D::new(0., 0.));
+        let draw_local = draw_to_local(draw, area);
+        let anchor = Point2D::new(50., 50.);
+        let pointer = Point2D::new(400., 400.);
+        let sel = crate::app::crop::enforce_aspect(anchor, pointer, None)
+            .intersection(&draw_local)
+            .expect("seleção dentro da foto");
+        assert!(sel.min_x() >= draw_local.min_x() && sel.max_x() <= draw_local.max_x());
+        assert!(sel.min_y() >= draw_local.min_y() && sel.max_y() <= draw_local.max_y());
+        // E convertida para tela, cai dentro do desenho de tela.
+        let screen = crop_to_screen(sel, area);
+        assert!(screen.min_x() >= draw.min_x() - 0.01 && screen.max_x() <= draw.max_x() + 0.01);
+        assert!(screen.min_y() >= draw.min_y() - 0.01 && screen.max_y() <= draw.max_y() + 0.01);
+        // O px final é válido (antes era `None` = "seleção muito pequena").
+        let out = crate::app::crop::crop_to_preview_px(draw, dims, screen).expect("px válido");
+        assert!(out.w > 0 && out.h > 0);
     }
 }

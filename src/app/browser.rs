@@ -36,6 +36,16 @@ impl Component for Browser {
         let scanning = status.read().scanning.is_some();
         let hide_tree = config.read().config.hide_tree;
         let hide_photos = config.read().config.hide_photos;
+        // Cores de texto vêm da paleta: o painel usa o fundo do tema, então
+        // um cinza claro fixo sumia nos temas claros.
+        let theme_name = config.read().config.theme.clone();
+        let pal = crate::theme::palette(&theme_name);
+        let colors = PanelColors {
+            text: pal.text_primary.to_color(),
+            sel_bg: selection_bg(&theme_name),
+            faint: pal.text_secondary.to_color(),
+        };
+        let faint_c = colors.faint;
         // A altura da linha deriva da tipografia: com fonte maior, uma altura
         // fixa faria o texto vazar para a linha de baixo.
         let row = row_height(&m);
@@ -50,14 +60,14 @@ impl Component for Browser {
                         .width(Size::fill())
                         .padding(ui::gaps(&m, 2., 2.))
                         .spacing(m.gap(1.5))
-                        .child(ui::section(&m, "Favoritas"))
+                        .child(ui::section(&m, faint_c, "Favoritas"))
                         .maybe(favorites.is_empty(), |el| {
-                            el.child(ui::faint(&m, "Nenhuma pasta fixada."))
+                            el.child(ui::faint(&m, faint_c, "Nenhuma pasta fixada."))
                         })
                         .children(
                             favorites
                                 .into_iter()
-                                .map(|dir| favorite_row(&m, dir, photos, services.clone())),
+                                .map(|dir| favorite_row(&m, dir, colors, photos, services.clone())),
                         ),
                 )
                 .child(
@@ -65,12 +75,12 @@ impl Component for Browser {
                         .width(Size::fill())
                         .padding(ui::gaps(&m, 2., 2.))
                         .spacing(m.gap(1.5))
-                        .child(ui::section(&m, "Pasta atual"))
+                        .child(ui::section(&m, faint_c, "Pasta atual"))
                         .maybe(snapshot.tree.is_none(), |el| {
-                            el.child(ui::faint(&m, "Nenhuma pasta aberta."))
+                            el.child(ui::faint(&m, faint_c, "Nenhuma pasta aberta."))
                         })
                         .maybe_child(snapshot.tree.clone().map(|root| {
-                            current_folder(&m, root, photos, config, services.clone())
+                            current_folder(&m, root, colors, photos, config, services.clone())
                         })),
                 ),
         );
@@ -90,16 +100,17 @@ impl Component for Browser {
                     .child(ui::text(
                         &m,
                         ui::Role::Small,
-                        Color::from_argb(190, 140, 140, 148),
+                        faint_c,
                         format!("Fotos ({})", snapshot.visible.len()),
                     ))
-                    .maybe(scanning, |el| el.child(ui::faint(&m, "varrendo…"))),
+                    .maybe(scanning, |el| el.child(ui::faint(&m, faint_c, "varrendo…"))),
             )
             .child(photo_list(
                 &m,
                 row,
                 snapshot.visible,
                 snapshot.sel,
+                colors,
                 services,
             ));
 
@@ -150,10 +161,22 @@ impl Component for Browser {
     }
 }
 
+/// Cores de texto/realce do painel, resolvidas da paleta uma vez no `render`.
+#[derive(Clone, Copy)]
+struct PanelColors {
+    /// Nomes de pastas e fotos.
+    text: Color,
+    /// Fundo da linha selecionada.
+    sel_bg: Color,
+    /// Texto de apoio ("Nenhuma pasta…", contadores, cabeçalhos).
+    faint: Color,
+}
+
 /// Linha de uma pasta favorita: nome + botão de desafixar.
 fn favorite_row(
     m: &ui::Metrics,
     dir: std::path::PathBuf,
+    colors: PanelColors,
     photos: Radio<AppState, AppChannel>,
     services: Services,
 ) -> impl IntoElement {
@@ -171,9 +194,7 @@ fn favorite_row(
         .cross_align(Alignment::Center)
         .spacing(m.gap(1.5))
         .corner_radius(m.radius_sm())
-        .maybe(active, |el| {
-            el.background(Color::from_argb(40, 255, 255, 255))
-        })
+        .maybe(active, |el| el.background(colors.sel_bg))
         .child(ui::svg(m, "folder"))
         .child(
             Button::new()
@@ -184,7 +205,7 @@ fn favorite_row(
                         state::open_dir_path(&services, st, for_open.clone());
                     });
                 })
-                .child(ui::text(m, ui::Role::Body, TEXT, name)),
+                .child(ui::text(m, ui::Role::Body, colors.text, name)),
         )
         .child(ui::icon_button(
             m,
@@ -205,13 +226,22 @@ fn row_height(m: &ui::Metrics) -> f32 {
     (line + ROW_PAD * 2.0 * m.scale()).ceil()
 }
 
-/// Cor de texto padrão do painel (fundo escuro nos dois temas).
-const TEXT: Color = Color::from_rgb(228, 228, 232);
+/// Fundo do realce de seleção: visível no tema vigente.
+/// Sobre fundo escuro um véu branco funciona; sobre fundo claro ele some,
+/// então lá o véu é escuro.
+fn selection_bg(theme: &str) -> Color {
+    if crate::theme::is_dark(theme) {
+        Color::from_argb(40, 255, 255, 255)
+    } else {
+        Color::from_argb(28, 0, 0, 0)
+    }
+}
 
 /// Cabeçalho da pasta atual: nome + fixar/desafixar, e a árvore abaixo.
 fn current_folder(
     m: &ui::Metrics,
     root: state::DirNode,
+    colors: PanelColors,
     photos: Radio<AppState, AppChannel>,
     config: Radio<AppState, AppChannel>,
     services: Services,
@@ -233,7 +263,7 @@ fn current_folder(
                 .cross_align(Alignment::Center)
                 .spacing(m.gap(1.5))
                 .child(ui::svg(m, "folder-open"))
-                .child(ui::text(m, ui::Role::Body, TEXT, root.name()))
+                .child(ui::text(m, ui::Role::Body, colors.text, root.name()))
                 .child(
                     // O alvo do star tem área de clique mínima (24px). O
                     // `compact()` antigo dava 14px, e um alvo de 14px é
@@ -263,7 +293,7 @@ fn current_folder(
             ScrollView::new()
                 .width(Size::fill())
                 .height(Size::fill())
-                .child(tree_rows(m, tree, current, photos, config, services)),
+                .child(tree_rows(m, tree, colors, current, photos, config, services)),
         )
 }
 
@@ -271,6 +301,7 @@ fn current_folder(
 fn tree_rows(
     m: &ui::Metrics,
     node: state::DirNode,
+    colors: PanelColors,
     current: Option<std::path::PathBuf>,
     _photos: Radio<AppState, AppChannel>,
     config: Radio<AppState, AppChannel>,
@@ -286,11 +317,11 @@ fn tree_rows(
 
     rect()
         .width(Size::fill())
-        .child(tree_row(m, node, current.clone(), services.clone()))
+        .child(tree_row(m, node, colors, current.clone(), services.clone()))
         .maybe(expanded, |el| {
             el.children(
                 kids.into_iter().map(|kid| {
-                    tree_rows(m, kid, current.clone(), _photos, config, services.clone())
+                    tree_rows(m, kid, colors, current.clone(), _photos, config, services.clone())
                 }),
             )
         })
@@ -300,6 +331,7 @@ fn tree_rows(
 fn tree_row(
     m: &ui::Metrics,
     node: state::DirNode,
+    colors: PanelColors,
     current: Option<std::path::PathBuf>,
     services: Services,
 ) -> impl IntoElement {
@@ -317,9 +349,7 @@ fn tree_row(
         .cross_align(Alignment::Center)
         .spacing(m.gap(1.))
         .corner_radius(m.radius_sm())
-        .maybe(active, |el| {
-            el.background(Color::from_argb(40, 255, 255, 255))
-        })
+        .maybe(active, |el| el.background(colors.sel_bg))
         .child(if has_kids {
             Button::new()
                 .flat()
@@ -364,7 +394,7 @@ fn tree_row(
                         .cross_align(Alignment::Center)
                         .spacing(m.gap(1.5))
                         .child(ui::svg(m, "folder"))
-                        .child(ui::text(m, ui::Role::Body, TEXT, node.name())),
+                        .child(ui::text(m, ui::Role::Body, colors.text, node.name())),
                 ),
         )
 }
@@ -409,13 +439,13 @@ fn photo_list(
     row: f32,
     visible: Vec<PhotoPath>,
     sel: Option<usize>,
+    colors: PanelColors,
     services: Services,
 ) -> impl IntoElement {
     if visible.is_empty() {
-        return ui::faint(m, "Nenhuma foto.").into_element();
+        return ui::faint(m, colors.faint, "Nenhuma foto.").into_element();
     }
     let count = visible.len();
-    let text = TEXT;
     // `m` é `&Metrics` e a closure do VirtualScrollView é `move`: copiamos o
     // valor (ele é `Copy`) para não emprestar o parâmetro do caller.
     let m = *m;
@@ -444,13 +474,11 @@ fn photo_list(
                 .padding(ui::gaps_of(m, ROW_PAD, 1.5))
                 .overflow(Overflow::Clip)
                 .corner_radius(m.radius_sm())
-                .maybe(selected, |el| {
-                    el.background(Color::from_argb(40, 255, 255, 255))
-                })
+                .maybe(selected, |el| el.background(colors.sel_bg))
                 .child(ui::text_one_line(
                     &m,
                     ui::Role::Body,
-                    text,
+                    colors.text,
                     photo.display_name(),
                 ))
                 .on_press(move |_| {

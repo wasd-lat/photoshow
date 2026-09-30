@@ -10,8 +10,9 @@
 use std::path::PathBuf;
 
 use crate::app::services::Services;
-use crate::app::state::{self, AppChannel};
+use crate::app::state::{self, AppChannel, AppState};
 use crate::fs_browser::{self, PhotoPath};
+use freya::radio::RadioStation;
 
 /// O que o app deve abrir, já interpretado.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,23 +73,33 @@ pub fn resolve(paths: &[PathBuf]) -> Option<Target> {
 }
 
 /// Aplica o alvo no estado global.
-pub fn open_target(services: &Services, target: Target) {
+///
+/// Recebe a estação capturada no escopo com contexto (handler/render) porque
+/// tasks de background (`spawn_forever`, escopo `ROOT`) não enxergam o
+/// `RadioStation` provido no `app` — ver [`state::update_on`].
+pub fn open_target(
+    station: RadioStation<AppState, AppChannel>,
+    services: &Services,
+    target: Target,
+) {
     match target {
-        Target::Folder(dir) => state::update(AppChannel::Photos, |st| {
+        Target::Folder(dir) => state::update_on(station, AppChannel::Photos, |st| {
             state::open_dir_path(services, st, dir);
         }),
-        Target::Selection { dir, photo } => state::update(AppChannel::Photos, |st| {
-            state::open_dir_and_select(services, st, dir, photo);
-        }),
+        Target::Selection { dir, photo } => {
+            state::update_on(station, AppChannel::Photos, |st| {
+                state::open_dir_and_select(services, st, dir, photo);
+            });
+        }
         Target::Files(photos) => {
-            state::update(AppChannel::Photos, |st| {
+            state::update_on(station, AppChannel::Photos, |st| {
                 st.tree = None;
                 st.current_dir = None;
                 st.status = format!("{} arquivos soltos", photos.len());
                 state::replace_photos(st, services, photos);
             });
             // Arquivos soltos não têm árvore de pastas: recolhe navegação e galeria.
-            state::update(AppChannel::Config, |st| {
+            state::update_on(station, AppChannel::Config, |st| {
                 st.config.hide_browser = true;
                 st.config.hide_gallery = true;
                 st.config.hide_tree = true;
@@ -100,11 +111,15 @@ pub fn open_target(services: &Services, target: Target) {
 }
 
 /// Abre o que `paths` pedir; `false` quando não há nada para abrir.
-pub fn open_paths(services: &Services, paths: &[PathBuf]) -> bool {
+pub fn open_paths(
+    station: RadioStation<AppState, AppChannel>,
+    services: &Services,
+    paths: &[PathBuf],
+) -> bool {
     let Some(target) = resolve(paths) else {
         return false;
     };
-    open_target(services, target);
+    open_target(station, services, target);
     true
 }
 

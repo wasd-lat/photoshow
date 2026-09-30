@@ -195,7 +195,7 @@ fn open_startup_paths(services: &Services) {
         Ok(mut slot) => slot.drain(..).collect(),
         Err(poisoned) => poisoned.into_inner().drain(..).collect(),
     };
-    if !crate::cli::open_paths(services, &requested) {
+    if !crate::cli::open_paths(state::station(), services, &requested) {
         reopen_last_folder(services);
     }
 }

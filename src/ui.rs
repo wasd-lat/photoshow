@@ -158,26 +158,20 @@ pub fn text_one_line(m: &Metrics, role: Role, color: Color, content: impl Into<S
         .text(content.into())
 }
 
-/// Rótulo secundário.
+/// Rótulo secundário, na cor de texto de apoio do tema.
+///
+/// Recebe a cor explícita (em geral `palette.text_secondary`): cinza
+/// translúcido fixo some sobre fundo claro, então nada aqui pode ter cor
+/// queimada — ver o teste de contraste nas superfícies em `theme.rs`.
 #[must_use]
-pub fn faint(m: &Metrics, content: impl Into<String>) -> Label {
-    text(
-        m,
-        Role::Small,
-        Color::from_argb(150, 130, 130, 138),
-        content,
-    )
+pub fn faint(m: &Metrics, color: Color, content: impl Into<String>) -> Label {
+    text(m, Role::Small, color, content)
 }
 
-/// Cabeçalho de seção: versalete miúdo.
+/// Cabeçalho de seção: versalete miúdo, na cor de apoio do tema.
 #[must_use]
-pub fn section(m: &Metrics, content: &str) -> Label {
-    text(
-        m,
-        Role::Section,
-        Color::from_argb(140, 130, 130, 138),
-        content.to_uppercase(),
-    )
+pub fn section(m: &Metrics, color: Color, content: &str) -> Label {
+    text(m, Role::Section, color, content.to_uppercase())
 }
 
 /// Botão só com ícone, com alvo de clique mínimo e tooltip.

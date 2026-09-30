@@ -29,7 +29,8 @@ impl Component for StatusBar {
         let detail = detail_label(&services.load.read().clone(), zoom);
         let saving_note = if saving { " · salvando…" } else { "" };
         let m = ui::Metrics::new(channel(AppChannel::Config).read().config.ui_scale);
-        let dim = Color::from_argb(170, 140, 140, 148);
+        let pal = crate::theme::palette(&channel(AppChannel::Config).read().config.theme);
+        let dim = pal.text_secondary.to_color();
 
         rect()
             .width(Size::fill())

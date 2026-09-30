@@ -567,13 +567,17 @@ fn format_filter(
 
 /// Diálogo nativo de pasta (roda fora da thread de UI).
 pub fn open_folder_dialog(services: Services) {
+    // A estação é capturada aqui (handler, com contexto) e movida para a task:
+    // dentro do `background` (escopo ROOT) o contexto do RadioStation não
+    // existe — ver `state::update_on`.
+    let station = state::station();
     // `background` (task da raiz), e não `spawn`: o menu que disparou isto é
     // desmontado no mesmo clique (`open.set(false)`) e uma task escopada seria
     // cancelada junto — o diálogo nunca chegaria a aparecer.
     background(async move {
         let picked = thread(|| rfd::FileDialog::new().pick_folder()).await;
         let Some(dir) = picked else { return };
-        crate::cli::open_target(&services, crate::cli::Target::Folder(dir));
+        crate::cli::open_target(station, &services, crate::cli::Target::Folder(dir));
     });
 }
 
@@ -582,6 +586,7 @@ pub fn open_folder_dialog(services: Services) {
 /// Um arquivo só abre a pasta dele com a foto já selecionada (é o que o
 /// usuário espera de "Abrir arquivos…"); vários viram lista solta.
 pub fn open_files_dialog(services: Services) {
+    let station = state::station();
     background(async move {
         let files = thread(|| {
             rfd::FileDialog::new()
@@ -598,24 +603,24 @@ pub fn open_files_dialog(services: Services) {
         }
         if files.len() == 1 {
             let Some(target) = crate::cli::resolve(&files) else {
-                no_valid_image();
+                no_valid_image(station);
                 return;
             };
-            crate::cli::open_target(&services, target);
+            crate::cli::open_target(station, &services, target);
             return;
         }
         let photos = crate::fs_browser::filter_loose_files(files);
         if photos.is_empty() {
-            no_valid_image();
+            no_valid_image(station);
             return;
         }
-        crate::cli::open_target(&services, crate::cli::Target::Files(photos));
+        crate::cli::open_target(station, &services, crate::cli::Target::Files(photos));
     });
 }
 
 /// Aviso na status bar: o usuário escolheu algo que não é imagem.
-fn no_valid_image() {
-    state::update(AppChannel::Status, |st| {
+fn no_valid_image(station: freya::radio::RadioStation<AppState, AppChannel>) {
+    state::update_on(station, AppChannel::Status, |st| {
         st.status = String::from("Nenhuma imagem válida selecionada.");
     });
 }
@@ -656,6 +661,9 @@ fn save_overwrite(
     };
     let editor_state = edit.read().editor.state();
     let config = state::snapshot().config;
+    // Capturada no handler (com contexto); dentro do `background` (ROOT) o
+    // `station()` não encontra o RadioStation — ver `state::update_on`.
+    let station = state::station();
 
     background(async move {
         if config.confirm_overwrite {
@@ -675,7 +683,7 @@ fn save_overwrite(
                 return;
             }
         }
-        state::update(AppChannel::Status, |st| {
+        state::update_on(station, AppChannel::Status, |st| {
             st.saving = true;
             st.status = String::from("Salvando…");
         });
@@ -696,10 +704,16 @@ fn save_as_dialog(
         .as_ref()
         .map(|c| c.display_name())
         .unwrap_or_else(|| String::from("foto.png"));
+    // Tudo que precisa do estado é lido aqui (handler, com contexto): dentro
+    // do `background` (ROOT) nem `station()` nem `snapshot()` funcionam, e o
+    // `Radio::read` de lá assinaria sem necessidade — ver `state::update_on`.
+    let station = state::station();
+    let editor_state = edit.read().editor.state();
+    let quality = state::snapshot().config.jpeg_quality;
 
     background(async move {
         let (Some(full), Some(base)) = (full, base) else {
-            state::update(AppChannel::Status, |st| {
+            state::update_on(station, AppChannel::Status, |st| {
                 st.status = String::from("Nada para salvar.");
             });
             return;
@@ -718,9 +732,7 @@ fn save_as_dialog(
         let Some(dest) = picked else {
             return;
         };
-        let editor_state = edit.read().editor.state();
-        let quality = state::snapshot().config.jpeg_quality;
-        state::update(AppChannel::Status, |st| {
+        state::update_on(station, AppChannel::Status, |st| {
             st.saving = true;
             st.status = String::from("Salvando…");
         });

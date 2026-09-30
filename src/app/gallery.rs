@@ -31,6 +31,8 @@ impl Component for Gallery {
         let snapshot = photos.read().clone();
         let m = ui::Metrics::new(config.read().config.ui_scale);
         let enabled = config.read().config.show_filmstrip;
+        let pal = crate::theme::palette(&config.read().config.theme);
+        let faint_c = pal.text_secondary.to_color();
         // O thumbnail é conteúdo, não texto: escala junto, mas no máximo 1.4x,
         // senão uma miniatura grande come a janela inteira.
         let cell =
@@ -40,13 +42,13 @@ impl Component for Gallery {
             return rect()
                 .expanded()
                 .padding(ui::gaps(&m, 2.5, 2.5))
-                .child(ui::faint(&m, "Galeria desativada — ative em Config."));
+                .child(ui::faint(&m, faint_c, "Galeria desativada — ative em Config."));
         }
         if snapshot.visible.is_empty() {
             return rect()
                 .expanded()
                 .padding(ui::gaps(&m, 2.5, 2.5))
-                .child(ui::faint(&m, "Nenhuma foto."));
+                .child(ui::faint(&m, faint_c, "Nenhuma foto."));
         }
 
         // Enfileira/drena miniaturas da janela em torno da seleção.
@@ -59,7 +61,7 @@ impl Component for Gallery {
             .vertical()
             .padding(ui::gaps(&m, 2., 2.))
             .spacing(m.gap(1.5))
-            .child(size_controls(&m, cell))
+            .child(size_controls(&m, faint_c, cell))
             .child(ScrollView::new().expanded().child(grid(
                 &m,
                 snapshot.visible,
@@ -73,18 +75,13 @@ impl Component for Gallery {
 }
 
 /// Cabeçalho: `−` slider `＋` e o valor em px.
-fn size_controls(m: &ui::Metrics, cell: f32) -> impl IntoElement {
+fn size_controls(m: &ui::Metrics, faint: Color, cell: f32) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .horizontal()
         .cross_align(Alignment::Center)
         .spacing(m.gap(2.))
-        .child(ui::text(
-            m,
-            ui::Role::Small,
-            Color::from_argb(190, 140, 140, 148),
-            "Tamanho:",
-        ))
+        .child(ui::text(m, ui::Role::Small, faint, "Tamanho:"))
         .child(ui::icon_button(
             m,
             "minus",
@@ -112,7 +109,7 @@ fn size_controls(m: &ui::Metrics, cell: f32) -> impl IntoElement {
         .child(ui::text(
             m,
             ui::Role::Small,
-            Color::from_argb(190, 140, 140, 148),
+            faint,
             format!("{cell:.0}px"),
         ))
 }
