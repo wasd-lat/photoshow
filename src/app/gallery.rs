@@ -180,8 +180,17 @@ fn cell_view(
 ) -> Element {
     let selected = Some(index) == sel;
     let path = photo.path().to_path_buf();
+    let display_name = photo.display_name();
     let photos_click = photos;
     let services_select = services.clone();
+
+    let (color_id, rating) = {
+        let st = photos.read();
+        (
+            st.sidecar.get_color(&display_name),
+            st.sidecar.get_rating(&display_name),
+        )
+    };
 
     // Duplo-clique numa miniatura maximiza o Visualizador (F9 restaura).
     let on_press = move |e: Event<PointerEventData>| {
@@ -221,10 +230,50 @@ fn cell_view(
                 .image_cover(ImageCover::Center)
                 .sampling_mode(SamplingMode::Mitchell)
         }))
+        .maybe(color_id > 0 || rating > 0, |el| {
+            el.child(
+                rect()
+                    .position(Position::new_absolute().left(4.).top(cell - 20.))
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(m.gap(0.8))
+                    .padding(ui::gaps(m, 0.2, 0.6))
+                    .background(Color::from_argb(200, 20, 20, 24))
+                    .corner_radius(m.radius_sm())
+                    .maybe(color_id > 0, |b| {
+                        b.child(
+                            rect()
+                                .width(Size::px(7.))
+                                .height(Size::px(7.))
+                                .background(tag_color(color_id))
+                                .corner_radius(3.5),
+                        )
+                    })
+                    .maybe(rating > 0, |b| {
+                        b.child(ui::text(
+                            m,
+                            ui::Role::Small,
+                            Color::from_rgb(255, 200, 0),
+                            format!("★{rating}"),
+                        ))
+                    }),
+            )
+        })
         .maybe(selected, |el| {
             el.border(Border::new().fill(super::viewer::ACCENT).width(2.5))
         })
         .on_pointer_press(on_press)
         .on_secondary_down(on_menu)
         .into_element()
+}
+
+fn tag_color(id: u8) -> Color {
+    match id {
+        1 => Color::from_rgb(239, 68, 68),
+        2 => Color::from_rgb(245, 158, 11),
+        3 => Color::from_rgb(16, 185, 129),
+        4 => Color::from_rgb(59, 130, 246),
+        5 => Color::from_rgb(139, 92, 246),
+        _ => Color::from_rgb(156, 163, 175),
+    }
 }

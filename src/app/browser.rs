@@ -480,6 +480,17 @@ fn walk_index(
     None
 }
 
+fn tag_color(id: u8) -> Color {
+    match id {
+        1 => Color::from_rgb(239, 68, 68),
+        2 => Color::from_rgb(245, 158, 11),
+        3 => Color::from_rgb(16, 185, 129),
+        4 => Color::from_rgb(59, 130, 246),
+        5 => Color::from_rgb(139, 92, 246),
+        _ => Color::from_rgb(156, 163, 175),
+    }
+}
+
 /// Lista virtualizada de fotos: 50k itens custam ~40 linhas.
 ///
 /// A seleção vai dentro do `builder_data` de propósito: o `PartialEq` do
@@ -521,6 +532,7 @@ fn photo_list(
             let photo = photo.clone();
             let index = item.index;
             let rating = sidecar.get_rating(&photo.display_name());
+            let color_id = sidecar.get_color(&photo.display_name());
             rect()
                 .key(item.index)
                 .width(Size::fill())
@@ -538,14 +550,29 @@ fn photo_list(
                     colors.text,
                     photo.display_name(),
                 ))
-                .maybe(rating > 0, |el| {
-                    el.child(ui::text(
-                        &m,
-                        ui::Role::Small,
-                        Color::from_rgb(255, 200, 0),
-                        format!("★{rating}"),
-                    ))
-                })
+                .child(
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .spacing(m.gap(1.))
+                        .maybe(color_id > 0, |el| {
+                            el.child(
+                                rect()
+                                    .width(Size::px(8.))
+                                    .height(Size::px(8.))
+                                    .background(tag_color(color_id))
+                                    .corner_radius(4.),
+                            )
+                        })
+                        .maybe(rating > 0, |el| {
+                            el.child(ui::text(
+                                &m,
+                                ui::Role::Small,
+                                Color::from_rgb(255, 200, 0),
+                                format!("★{rating}"),
+                            ))
+                        }),
+                )
                 .on_press(move |_| {
                     state::update(AppChannel::Photos, |st| {
                         let idx = st

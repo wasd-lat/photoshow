@@ -355,8 +355,14 @@ fn model_of(path: &Path) -> Option<String> {
     let mut reader = std::io::BufReader::new(file);
     let ex = exif::Reader::new().read_from_container(&mut reader).ok()?;
     let field = ex.get_field(exif::Tag::Model, exif::In::PRIMARY)?;
-    let text = field.display_value().to_string();
-    let text = text.trim().to_owned();
+    let text = match &field.value {
+        exif::Value::Ascii(vec) => vec
+            .first()
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(|s| s.trim_matches('\0').trim().to_owned()),
+        _ => Some(field.display_value().to_string()),
+    };
+    let text = text?.trim_matches('"').trim().to_owned();
     (!text.is_empty()).then_some(text)
 }
 
@@ -692,4 +698,88 @@ fn histogram_reports_clipping_caused_by_the_adjustment_itself() {
         after.blowout > 0,
         "o ajuste estourou e o histograma não avisou"
     );
+}
+
+#[test]
+fn sidecar_stores_ratings_colors_and_tags() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sidecar = photoshow::fs_browser::FolderSidecar::load_for_dir(dir.path());
+    assert_eq!(sidecar.get_rating("foto1.jpg"), 0);
+    assert_eq!(sidecar.get_color("foto1.jpg"), 0);
+    assert!(!sidecar.has_tag("foto1.jpg", "férias"));
+
+    sidecar.set_rating("foto1.jpg".to_string(), 5);
+    sidecar.set_color("foto1.jpg".to_string(), 2);
+    sidecar.add_tag("foto1.jpg".to_string(), "Férias".to_string());
+    sidecar.add_tag("foto1.jpg".to_string(), "Praia".to_string());
+    sidecar.save_for_dir(dir.path()).expect("save sidecar");
+
+    let loaded = photoshow::fs_browser::FolderSidecar::load_for_dir(dir.path());
+    assert_eq!(loaded.get_rating("foto1.jpg"), 5);
+    assert_eq!(loaded.get_color("foto1.jpg"), 2);
+    assert!(loaded.has_tag("foto1.jpg", "férias"));
+    assert!(loaded.has_tag("foto1.jpg", "praia"));
+    assert_eq!(loaded.get_tags("foto1.jpg"), &["férias", "praia"]);
+
+    let mut modified = loaded;
+    modified.remove_tag("foto1.jpg", "férias");
+    assert!(!modified.has_tag("foto1.jpg", "férias"));
+    assert!(modified.has_tag("foto1.jpg", "praia"));
+}
+
+#[test]
+fn batch_processing_transforms_and_reports_files() {
+    let dir = fixture();
+    let dest_dir = dir.path().join("saida_lote");
+    std::fs::create_dir_all(&dest_dir).expect("mkdir");
+
+    let p1 = write_photo(dir.path(), "lote1.png", 200, 100);
+    let p2 = write_photo(dir.path(), "lote2.jpg", 150, 150);
+
+    let photos = vec![
+        photoshow::fs_browser::PhotoPath::new(p1).expect("photo1"),
+        photoshow::fs_browser::PhotoPath::new(p2).expect("photo2"),
+    ];
+
+    let cfg = photoshow::batch::BatchConfig {
+        rotate_cw: 1, // 90°
+        max_dim: Some(80),
+        format: String::from("jpg"),
+        jpeg_quality: 85,
+        name_pattern: String::from("saida_{i}"),
+        dest_dir: dest_dir.clone(),
+    };
+
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel();
+    photoshow::batch::run_batch(photos, cfg, cancel, move |prog| {
+        let _ = tx.send(prog);
+    });
+
+    let mut last = photoshow::batch::BatchProgress::default();
+    while let Ok(prog) = rx.recv() {
+        let done = prog.finished;
+        last = prog;
+        if done {
+            break;
+        }
+    }
+
+    assert!(last.finished, "batch não finalizou");
+    assert_eq!(last.successes, 2, "deveria ter processado 2 fotos");
+    assert!(
+        last.failures.is_empty(),
+        "houve falhas: {:?}",
+        last.failures
+    );
+
+    // Valida que os arquivos transformados foram criados
+    let out1 = dest_dir.join("saida_001.jpg");
+    let out2 = dest_dir.join("saida_002.jpg");
+    assert!(out1.exists(), "saida_001.jpg ausente");
+    assert!(out2.exists(), "saida_002.jpg ausente");
+
+    let dec1 = photoshow::image_store::decode_photo(&out1).expect("decode out1");
+    // Original 200x100 rotacionado 90° vira 100x200, reduzido com max 80 vira 40x80
+    assert!(dec1.full_size.0 <= 80 && dec1.full_size.1 <= 80);
 }

@@ -82,6 +82,40 @@ pub struct AppConfig {
     /// Proporção (%) da altura da galeria no dock (8..=50).
     #[serde(default = "default_dock_gallery")]
     pub dock_gallery_percent: f32,
+    /// Definições de tags coloridas (1..=8).
+    #[serde(default = "default_color_tags")]
+    pub color_tags: Vec<ColorTagDef>,
+    /// Catálogo global de tags nomeadas para autocomplete/organização.
+    #[serde(default)]
+    pub named_tags: Vec<String>,
+}
+
+/// Definição de etiqueta colorida personalizada pelo usuário.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColorTagDef {
+    pub id: u8,
+    pub name: String,
+    pub color_hex: String,
+}
+
+impl ColorTagDef {
+    pub fn new(id: u8, name: impl Into<String>, hex: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            color_hex: hex.into(),
+        }
+    }
+}
+
+pub fn default_color_tags() -> Vec<ColorTagDef> {
+    vec![
+        ColorTagDef::new(1, "Vermelho", "#EF4444"),
+        ColorTagDef::new(2, "Amarelo", "#F59E0B"),
+        ColorTagDef::new(3, "Verde", "#10B981"),
+        ColorTagDef::new(4, "Azul", "#3B82F6"),
+        ColorTagDef::new(5, "Roxo", "#8B5CF6"),
+    ]
 }
 
 fn default_sort_criteria() -> String {
@@ -155,6 +189,8 @@ impl Default for AppConfig {
             slideshow_interval_secs: 3,
             dock_browser_percent: 24.0,
             dock_gallery_percent: 20.0,
+            color_tags: default_color_tags(),
+            named_tags: Vec::new(),
         }
     }
 }

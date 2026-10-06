@@ -79,6 +79,19 @@ impl Component for Toolbar {
                     .spacing(m.gap(1.5))
                     .child(format_filter(&m, text_color, photos, services.clone()))
                     .child(sort_select(&m, text_color, photos, services.clone()))
+                    .child(rating_filter_select(
+                        &m,
+                        text_color,
+                        photos,
+                        services.clone(),
+                    ))
+                    .child(color_filter_select(
+                        &m,
+                        text_color,
+                        photos,
+                        cfg.color_tags.clone(),
+                        services.clone(),
+                    ))
                     .child(ui::icon_button(
                         &m,
                         "sliders-horizontal",
@@ -701,6 +714,91 @@ fn sort_select(
                 });
             }),
         ))
+}
+
+/// Dropdown de filtro de estrelas.
+fn rating_filter_select(
+    _m: &ui::Metrics,
+    _text_color: Color,
+    photos: Radio<AppState, AppChannel>,
+    services: Services,
+) -> impl IntoElement {
+    let current_rating = photos.read().rating_filter;
+    let label = match current_rating {
+        0 => "Todas ★",
+        1 => "≥ 1 ★",
+        2 => "≥ 2 ★",
+        3 => "≥ 3 ★",
+        4 => "≥ 4 ★",
+        _ => "5 ★",
+    };
+    let options: &[(u8, &str)] = &[
+        (0, "Todas ★"),
+        (1, "≥ 1 ★"),
+        (2, "≥ 2 ★"),
+        (3, "≥ 3 ★"),
+        (4, "≥ 4 ★"),
+        (5, "5 ★"),
+    ];
+
+    Select::new()
+        .selected_item(label)
+        .children(options.iter().map(|(val, name)| {
+            let val = *val;
+            let on_press: Press = {
+                let services = services.clone();
+                move |_| {
+                    state::update(AppChannel::Photos, |st| {
+                        state::set_rating_filter(st, &services, val);
+                    });
+                }
+            }
+            .into();
+            MenuItem::new()
+                .selected(val == current_rating)
+                .on_press(on_press)
+                .child(*name)
+        }))
+}
+
+/// Dropdown de filtro de cores.
+fn color_filter_select(
+    _m: &ui::Metrics,
+    _text_color: Color,
+    photos: Radio<AppState, AppChannel>,
+    color_tags: Vec<crate::config::ColorTagDef>,
+    services: Services,
+) -> impl IntoElement {
+    let current_color = photos.read().color_filter;
+    let label = if current_color == 0 {
+        String::from("Todas Cores")
+    } else {
+        color_tags
+            .iter()
+            .find(|c| c.id == current_color)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("Cor {current_color}"))
+    };
+
+    Select::new().selected_item(label.as_str()).children(
+        std::iter::once((0u8, String::from("Todas Cores")))
+            .chain(color_tags.into_iter().map(|c| (c.id, c.name)))
+            .map(|(id, name)| {
+                let on_press: Press = {
+                    let services = services.clone();
+                    move |_| {
+                        state::update(AppChannel::Photos, |st| {
+                            state::set_color_filter(st, &services, id);
+                        });
+                    }
+                }
+                .into();
+                MenuItem::new()
+                    .selected(id == current_color)
+                    .on_press(on_press)
+                    .child(name)
+            }),
+    )
 }
 
 /// Diálogo nativo de pasta (roda fora da thread de UI).

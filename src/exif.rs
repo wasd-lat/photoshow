@@ -277,7 +277,7 @@ impl ExifDetails {
 
         let get_str = |tag: exif::Tag| {
             src.get_field(tag, exif::In::PRIMARY)
-                .map(|f| f.display_value().to_string().trim().to_owned())
+                .map(|f| f.display_value().to_string().trim().trim_matches('"').to_owned())
                 .filter(|s| !s.is_empty())
         };
 

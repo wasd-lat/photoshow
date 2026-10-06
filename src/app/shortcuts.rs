@@ -153,6 +153,26 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
                 state::update(AppChannel::Photos, |st| state::rate_current_photo(st, 5));
                 return true;
             }
+            Code::Digit6 | Code::Numpad6 => {
+                state::update(AppChannel::Photos, |st| state::color_current_photo(st, 1));
+                return true;
+            }
+            Code::Digit7 | Code::Numpad7 => {
+                state::update(AppChannel::Photos, |st| state::color_current_photo(st, 2));
+                return true;
+            }
+            Code::Digit8 | Code::Numpad8 => {
+                state::update(AppChannel::Photos, |st| state::color_current_photo(st, 3));
+                return true;
+            }
+            Code::Digit9 | Code::Numpad9 => {
+                state::update(AppChannel::Photos, |st| state::color_current_photo(st, 4));
+                return true;
+            }
+            Code::KeyT => {
+                state::update(AppChannel::Dialogs, |st| st.exif_open = true);
+                return true;
+            }
             _ => {}
         }
     }

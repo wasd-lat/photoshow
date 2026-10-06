@@ -106,6 +106,10 @@ pub fn sort_photos(photos: &mut [PhotoPath], criteria: SortCriteria, ascending: 
 pub struct FolderSidecar {
     #[serde(default)]
     pub ratings: std::collections::HashMap<String, u8>,
+    #[serde(default)]
+    pub colors: std::collections::HashMap<String, u8>,
+    #[serde(default)]
+    pub tags: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl FolderSidecar {
@@ -141,6 +145,54 @@ impl FolderSidecar {
         } else {
             self.ratings.insert(photo_name, rating.clamp(1, 5));
         }
+    }
+
+    #[must_use]
+    pub fn get_color(&self, photo_name: &str) -> u8 {
+        self.colors.get(photo_name).copied().unwrap_or(0)
+    }
+
+    pub fn set_color(&mut self, photo_name: String, color_id: u8) {
+        if color_id == 0 {
+            self.colors.remove(&photo_name);
+        } else {
+            self.colors.insert(photo_name, color_id);
+        }
+    }
+
+    #[must_use]
+    pub fn get_tags(&self, photo_name: &str) -> &[String] {
+        self.tags.get(photo_name).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn add_tag(&mut self, photo_name: String, tag: String) {
+        let tag = tag.trim().to_lowercase();
+        if tag.is_empty() {
+            return;
+        }
+        let list = self.tags.entry(photo_name).or_default();
+        if !list.contains(&tag) {
+            list.push(tag);
+        }
+    }
+
+    pub fn remove_tag(&mut self, photo_name: &str, tag: &str) {
+        let tag = tag.trim().to_lowercase();
+        if let Some(list) = self.tags.get_mut(photo_name) {
+            list.retain(|t| t != &tag);
+            if list.is_empty() {
+                self.tags.remove(photo_name);
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn has_tag(&self, photo_name: &str, tag: &str) -> bool {
+        let tag = tag.trim().to_lowercase();
+        self.tags
+            .get(photo_name)
+            .map(|list| list.iter().any(|t| t == &tag))
+            .unwrap_or(false)
     }
 }
 

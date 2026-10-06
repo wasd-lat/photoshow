@@ -178,6 +178,12 @@ pub struct AppState {
     pub compare_split: f32,
     /// Índice em [`FORMAT_FILTERS`].
     pub format_filter: usize,
+    /// Filtro de estrelas (0 = todas; 1..=5 = estrelas mínimas).
+    pub rating_filter: u8,
+    /// Filtro de cor (0 = todas; 1..=8 = tag de cor específica).
+    pub color_filter: u8,
+    /// Filtro de tag nomeada (None = todas; Some(tag) = filtrada).
+    pub tag_filter: Option<String>,
 
     /// Critério de ordenação ativo (0.2).
     pub sort_criteria: fs_browser::SortCriteria,
@@ -273,6 +279,9 @@ impl AppState {
             compare: false,
             compare_split: COMPARE_SPLIT_DEFAULT,
             format_filter: 0,
+            rating_filter: 0,
+            color_filter: 0,
+            tag_filter: None,
             sort_criteria,
             sort_ascending,
             search_query: String::new(),
@@ -566,19 +575,32 @@ pub fn replace_photos(state: &mut AppState, services: &Services, photos: Vec<Pho
     recompute_visible(state, services);
 }
 
-/// Recomputa `visible` segundo filtros (formato + busca) e ordenação (0.2).
+/// Recomputa `visible` segundo filtros (formato + busca + estrelas + cores + tags) e ordenação.
 pub fn recompute_visible(state: &mut AppState, services: &Services) {
     let filter = FORMAT_FILTERS
         .get(state.format_filter)
         .copied()
         .unwrap_or("Todas");
     let query = state.search_query.trim().to_lowercase();
+    let min_rating = state.rating_filter;
+    let color_id = state.color_filter;
+    let tag_name = state.tag_filter.as_ref().map(|t| t.trim().to_lowercase());
+
     state.visible = state
         .photos
         .iter()
         .filter(|p| {
-            matches_filter(p, filter)
-                && (query.is_empty() || p.display_name().to_lowercase().contains(&query))
+            let name = p.display_name();
+            let matches_format = matches_filter(p, filter);
+            let matches_search = query.is_empty() || name.to_lowercase().contains(&query);
+            let matches_rating = min_rating == 0 || state.sidecar.get_rating(&name) >= min_rating;
+            let matches_color = color_id == 0 || state.sidecar.get_color(&name) == color_id;
+            let matches_tag = match &tag_name {
+                Some(t) => state.sidecar.has_tag(&name, t),
+                None => true,
+            };
+
+            matches_format && matches_search && matches_rating && matches_color && matches_tag
         })
         .cloned()
         .collect();
@@ -643,6 +665,68 @@ pub fn rate_current_photo(state: &mut AppState, rating: u8) {
     if let Some(ref dir) = state.current_dir {
         let _ = state.sidecar.save_for_dir(dir);
     }
+}
+
+/// Atribui tag colorida à foto atual no sidecar (0 = desmarca).
+pub fn color_current_photo(state: &mut AppState, color_id: u8) {
+    let Some(cur) = state.current.as_ref() else {
+        return;
+    };
+    let name = cur.display_name();
+    state.sidecar.set_color(name, color_id);
+    if let Some(ref dir) = state.current_dir {
+        let _ = state.sidecar.save_for_dir(dir);
+    }
+}
+
+/// Adiciona tag nomeada à foto atual no sidecar.
+pub fn tag_current_photo(state: &mut AppState, tag: String) {
+    let Some(cur) = state.current.as_ref() else {
+        return;
+    };
+    let name = cur.display_name();
+    let tag = tag.trim().to_lowercase();
+    if tag.is_empty() {
+        return;
+    }
+    if !state.config.named_tags.contains(&tag) {
+        state.config.named_tags.push(tag.clone());
+        state.config.save().ok();
+    }
+    state.sidecar.add_tag(name, tag);
+    if let Some(ref dir) = state.current_dir {
+        let _ = state.sidecar.save_for_dir(dir);
+    }
+}
+
+/// Remove tag nomeada da foto atual no sidecar.
+pub fn untag_current_photo(state: &mut AppState, tag: &str) {
+    let Some(cur) = state.current.as_ref() else {
+        return;
+    };
+    let name = cur.display_name();
+    state.sidecar.remove_tag(&name, tag);
+    if let Some(ref dir) = state.current_dir {
+        let _ = state.sidecar.save_for_dir(dir);
+    }
+}
+
+/// Altera o filtro mínimo de estrelas (0 = todas).
+pub fn set_rating_filter(state: &mut AppState, services: &Services, min_rating: u8) {
+    state.rating_filter = min_rating;
+    recompute_visible(state, services);
+}
+
+/// Altera o filtro de tag colorida (0 = todas).
+pub fn set_color_filter(state: &mut AppState, services: &Services, color_id: u8) {
+    state.color_filter = color_id;
+    recompute_visible(state, services);
+}
+
+/// Altera o filtro de tag nomeada.
+pub fn set_tag_filter(state: &mut AppState, services: &Services, tag: Option<String>) {
+    state.tag_filter = tag;
+    recompute_visible(state, services);
 }
 
 /// Alterna modo slideshow (0.3).
