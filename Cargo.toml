@@ -22,6 +22,7 @@ serde_json = "1"
 directories = "6"
 arboard = "3"
 open = "5"
+trash = "5"
 
 [dev-dependencies]
 tempfile = "3"

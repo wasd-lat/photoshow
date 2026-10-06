@@ -7,7 +7,7 @@ use freya::components::{
 };
 use freya::radio::Radio;
 
-use crate::fs_browser::PhotoPath;
+use crate::fs_browser::{self, PhotoPath};
 use crate::ui;
 
 use super::services::Services;
@@ -31,6 +31,29 @@ impl Component for Browser {
         let status = channel(AppChannel::Status);
 
         let snapshot = photos.read().clone();
+        let search_init = snapshot.search_query.clone();
+        let search_buf = use_state(|| search_init.clone());
+        use_side_effect({
+            let search_init = search_init.clone();
+            let mut search_buf = search_buf;
+            move || {
+                search_buf.set_if_modified(search_init.clone());
+            }
+        });
+
+        let current_text = search_buf.read().clone();
+        use_side_effect({
+            let services = services.clone();
+            let current_text = current_text.clone();
+            move || {
+                state::update(AppChannel::Photos, |st| {
+                    if st.search_query != current_text {
+                        state::set_search(st, &services, current_text.clone());
+                    }
+                });
+            }
+        });
+
         let m = ui::Metrics::new(config.read().config.ui_scale);
         let favorites = config.read().config.favorites.clone();
         let scanning = status.read().scanning.is_some();
@@ -51,39 +74,38 @@ impl Component for Browser {
         let row = row_height(&m);
 
         // Árvore (favoritas + pasta atual) — pode ser recolhida independentemente.
-        let tree_section = rect().width(Size::fill()).child(
-            ScrollView::new()
-                .width(Size::fill())
-                .height(Size::fill())
-                .child(
-                    rect()
-                        .width(Size::fill())
-                        .padding(ui::gaps(&m, 2., 2.))
-                        .spacing(m.gap(1.5))
-                        .child(ui::section(&m, faint_c, "Favoritas"))
-                        .maybe(favorites.is_empty(), |el| {
-                            el.child(ui::faint(&m, faint_c, "Nenhuma pasta fixada."))
-                        })
-                        .children(
-                            favorites
-                                .into_iter()
-                                .map(|dir| favorite_row(&m, dir, colors, photos, services.clone())),
-                        ),
-                )
-                .child(
-                    rect()
-                        .width(Size::fill())
-                        .padding(ui::gaps(&m, 2., 2.))
-                        .spacing(m.gap(1.5))
-                        .child(ui::section(&m, faint_c, "Pasta atual"))
-                        .maybe(snapshot.tree.is_none(), |el| {
-                            el.child(ui::faint(&m, faint_c, "Nenhuma pasta aberta."))
-                        })
-                        .maybe_child(snapshot.tree.clone().map(|root| {
-                            current_folder(&m, root, colors, photos, config, services.clone())
-                        })),
-                ),
-        );
+        let tree_section =
+            rect().width(Size::fill()).child(
+                ScrollView::new()
+                    .width(Size::fill())
+                    .height(Size::fill())
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .padding(ui::gaps(&m, 2., 2.))
+                            .spacing(m.gap(1.5))
+                            .child(ui::section(&m, faint_c, "Favoritas"))
+                            .maybe(favorites.is_empty(), |el| {
+                                el.child(ui::faint(&m, faint_c, "Nenhuma pasta fixada."))
+                            })
+                            .children(favorites.into_iter().map(|dir| {
+                                favorite_row(&m, dir, colors, photos, services.clone())
+                            })),
+                    )
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .padding(ui::gaps(&m, 2., 2.))
+                            .spacing(m.gap(1.5))
+                            .child(ui::section(&m, faint_c, "Pasta atual"))
+                            .maybe(snapshot.tree.is_none(), |el| {
+                                el.child(ui::faint(&m, faint_c, "Nenhuma pasta aberta."))
+                            })
+                            .maybe_child(snapshot.tree.clone().map(|root| {
+                                current_folder(&m, root, colors, photos, config, services.clone())
+                            })),
+                    ),
+            );
 
         // Lista de fotos — pode ser recolhida independentemente.
         let photos_section = rect()
@@ -105,11 +127,34 @@ impl Component for Browser {
                     ))
                     .maybe(scanning, |el| el.child(ui::faint(&m, faint_c, "varrendo…"))),
             )
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(m.gap(1.))
+                    .padding(ui::gaps(&m, 0.5, 0.5))
+                    .child(ui::svg(&m, "search"))
+                    .child(
+                        freya::components::Input::new(search_buf)
+                            .placeholder("Buscar fotos...")
+                            .width(Size::fill())
+                            .on_submit({
+                                let services = services.clone();
+                                move |text: String| {
+                                    state::update(AppChannel::Photos, |st| {
+                                        state::set_search(st, &services, text);
+                                    });
+                                }
+                            }),
+                    ),
+            )
             .child(photo_list(
                 &m,
                 row,
                 snapshot.visible,
                 snapshot.sel,
+                snapshot.sidecar,
                 colors,
                 services,
             ));
@@ -293,7 +338,9 @@ fn current_folder(
             ScrollView::new()
                 .width(Size::fill())
                 .height(Size::fill())
-                .child(tree_rows(m, tree, colors, current, photos, config, services)),
+                .child(tree_rows(
+                    m, tree, colors, current, photos, config, services,
+                )),
         )
 }
 
@@ -319,11 +366,17 @@ fn tree_rows(
         .width(Size::fill())
         .child(tree_row(m, node, colors, current.clone(), services.clone()))
         .maybe(expanded, |el| {
-            el.children(
-                kids.into_iter().map(|kid| {
-                    tree_rows(m, kid, colors, current.clone(), _photos, config, services.clone())
-                }),
-            )
+            el.children(kids.into_iter().map(|kid| {
+                tree_rows(
+                    m,
+                    kid,
+                    colors,
+                    current.clone(),
+                    _photos,
+                    config,
+                    services.clone(),
+                )
+            }))
         })
 }
 
@@ -439,6 +492,7 @@ fn photo_list(
     row: f32,
     visible: Vec<PhotoPath>,
     sel: Option<usize>,
+    sidecar: fs_browser::FolderSidecar,
     colors: PanelColors,
     services: Services,
 ) -> impl IntoElement {
@@ -451,9 +505,10 @@ fn photo_list(
     let m = *m;
 
     VirtualScrollView::new_with_data(
-        (visible, sel),
-        move |item: VirtualItem, data: &(Vec<PhotoPath>, Option<usize>)| {
-            let (list, sel) = data;
+        (visible, sel, sidecar),
+        move |item: VirtualItem,
+              data: &(Vec<PhotoPath>, Option<usize>, fs_browser::FolderSidecar)| {
+            let (list, sel, sidecar) = data;
             let Some(photo) = list.get(item.index) else {
                 return rect()
                     .key(item.index)
@@ -465,12 +520,14 @@ fn photo_list(
             let services = services.clone();
             let photo = photo.clone();
             let index = item.index;
+            let rating = sidecar.get_rating(&photo.display_name());
             rect()
                 .key(item.index)
                 .width(Size::fill())
                 .height(Size::px(item.size))
                 .horizontal()
                 .cross_align(Alignment::Center)
+                .main_align(Alignment::SpaceBetween)
                 .padding(ui::gaps_of(m, ROW_PAD, 1.5))
                 .overflow(Overflow::Clip)
                 .corner_radius(m.radius_sm())
@@ -481,6 +538,14 @@ fn photo_list(
                     colors.text,
                     photo.display_name(),
                 ))
+                .maybe(rating > 0, |el| {
+                    el.child(ui::text(
+                        &m,
+                        ui::Role::Small,
+                        Color::from_rgb(255, 200, 0),
+                        format!("★{rating}"),
+                    ))
+                })
                 .on_press(move |_| {
                     state::update(AppChannel::Photos, |st| {
                         let idx = st

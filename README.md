@@ -78,16 +78,18 @@ pelo menu Config dentro do app.
 | `src/app/shortcuts.rs` | atalhos globais de teclado |
 | `src/app/toolbar.rs` | menu Arquivo, ferramentas de edição e filtro de formato |
 | `src/app/statusbar.rs` | posição, mensagens e dimensões |
-| `src/app/viewer.rs` | zoom, pan, crop e menu de contexto |
+| `src/app/viewer.rs` | zoom, pan, crop, comparador e menu de contexto |
 | `src/app/browser.rs` | favoritas, árvore de pastas e lista virtualizada |
 | `src/app/gallery.rs` | grade de miniaturas |
 | `src/app/crop.rs` | geometria do recorte (puro) |
+| `src/app/adjust_panel.rs` | painel de sliders de cor + histograma (puro exceto UI) |
 | `src/app/dialogs.rs` | modais de renomear e configurações |
 | `src/app/clipboard.rs` | copiar caminho/imagem |
 | `src/app/window.rs` | window state (maximizar, fullscreen) |
 | `src/image_store.rs` | decode em background → `ImageHandle` (sem GUI) |
 | `src/thumbs.rs` | fila de miniaturas |
 | `src/editor.rs` | pilha de edição não-destrutiva (puro) |
+| `src/adjust.rs` | matemática de cor + histograma (puro) |
 | `src/fs_browser.rs` | varredura e renomear (puro) |
 | `src/exif.rs` | orientação EXIF (puro) |
 | `src/config.rs` | preferências persistidas (puro) |
@@ -95,11 +97,31 @@ pelo menu Config dentro do app.
 | `src/theme.rs` | temas Freya (slate, charcoal, frost, paper) |
 | `src/ui.rs` | design system: métricas, primitivas e o dropdown ancorado |
 
-O domínio (`editor`, `exif`, `fs_browser`, `config`) não conhece a GUI
+O domínio (`editor`, `exif`, `fs_browser`, `config`, `adjust`) não conhece a GUI
 e é testado sem janela. `src/lib.rs` guarda os módulos e `src/main.rs`
 só faz o `launch`, o que deixa `tests/pipeline.rs` testar o caminho
 inteiro (varredura → decode → edição → bake → gravação → releitura)
 sem abrir janela.
+
+### Edição de cor: uma matemática só
+
+Exposição, contraste, saturação e temperatura vivem em `src/adjust.rs` como
+funções puras. O preview (`apply_to_image`) e o `bake` (o arquivo salvo) chamam
+**a mesma** função — é o requisito de "o que se vê é o que se salva", e um teste
+de integração cobre o caminho até o disco.
+
+Duas decisões que não são óbvias:
+
+- **Exposição em linear, o resto em gamma.** Um `+1 EV` dobra a luz, e isso só é
+  verdade se a multiplicação acontecer antes da curva sRGB. Contraste e
+  saturação, ao contrário, são percebidos em gamma — é assim que todo slider de
+  câmera sempre funcionou.
+- **Ajuste depois do crop.** Crop e ajuste são operações em eixos diferentes
+  (geometria x cor), então a ordem só muda o custo: ajustar depois economiza o
+  passe de cor sobre os pixels que o crop descartou.
+
+Um arrasto de slider vira **um** passo de undo (e não um por pixel do mouse):
+o `Ctrl+Z` volta o ajuste inteiro, que é o que o usuário espera.
 
 `src/ui.rs` é a fonte única de medidas de UI (escala tipográfica, espaçamento,
 raio, alvo de clique) e de duas peças que não existem prontas no Freya: o

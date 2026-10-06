@@ -25,7 +25,9 @@
 //! componente**. Ela vai para `config.rs` (com teste) ou `state.rs` (função
 //! pura). Assim a troca de toolkit não leva decisão junto.
 
+pub mod adjust;
 pub mod app;
+pub mod batch;
 pub mod cli;
 pub mod config;
 pub mod editor;

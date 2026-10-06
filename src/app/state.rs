@@ -41,10 +41,65 @@ pub const ASPECT_OPTIONS: &[(&str, Option<(u32, u32)>)] = &[
 /// Opções do filtro de formato (dropdown da toolbar).
 pub const FORMAT_FILTERS: &[&str] = &["Todas", "JPG", "PNG", "WebP", "TIFF", "BMP", "GIF"];
 
+/// Rótulo do slider de cada ajuste, na ordem em que aparecem no painel.
+///
+/// Fonte única de verdade: o painel itera esta lista, e os testes conferem
+/// que nenhum ajuste ficou de fora — um ajuste sem slider aqui é um recurso
+/// que o usuário não consegue alcançar.
+pub const ADJUST_SLIDERS: &[(&str, AdjustField, f32)] = &[
+    (
+        "Exposição",
+        AdjustField::Exposure,
+        crate::adjust::EXPOSURE_MAX,
+    ),
+    ("Contraste", AdjustField::Contrast, 1.0),
+    ("Saturação", AdjustField::Saturation, 1.0),
+    ("Temperatura", AdjustField::Temperature, 1.0),
+];
+
+/// Campo de [`crate::adjust::Adjust`] que um slider controla.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjustField {
+    /// Exposição em stops.
+    Exposure,
+    /// Contraste em torno do cinza médio.
+    Contrast,
+    /// Saturação.
+    Saturation,
+    /// Temperatura (frio/quente).
+    Temperature,
+}
+
+impl AdjustField {
+    /// Valor atual do campo nos ajustes da pilha.
+    #[must_use]
+    pub fn read(self, adj: &crate::adjust::Adjust) -> f32 {
+        match self {
+            Self::Exposure => adj.exposure,
+            Self::Contrast => adj.contrast,
+            Self::Saturation => adj.saturation,
+            Self::Temperature => adj.temperature,
+        }
+    }
+
+    /// Escreve no campo preservando os demais.
+    pub fn write(self, adj: &mut crate::adjust::Adjust, v: f32) {
+        match self {
+            Self::Exposure => adj.exposure = v,
+            Self::Contrast => adj.contrast = v,
+            Self::Saturation => adj.saturation = v,
+            Self::Temperature => adj.temperature = v,
+        }
+    }
+}
+
 /// Zoom mínimo/máximo (multiplicador do fit).
 pub const ZOOM_MIN: f32 = 0.1;
 /// Teto de zoom.
 pub const ZOOM_MAX: f32 = 20.0;
+
+/// Posição inicial da divisória do comparador (50% da largura da foto).
+pub const COMPARE_SPLIT_DEFAULT: f32 = 0.5;
 
 /// Nó da árvore de pastas (filhos carregados sob demanda).
 #[derive(Debug, Clone, PartialEq)]
@@ -117,8 +172,31 @@ pub struct AppState {
     pub fullscreen: bool,
     /// Visualizador maximizado?
     pub maximized: bool,
+    /// Comparador original × editado ligado?
+    pub compare: bool,
+    /// Posição da divisória do comparador (0..=1 da largura da foto).
+    pub compare_split: f32,
     /// Índice em [`FORMAT_FILTERS`].
     pub format_filter: usize,
+
+    /// Critério de ordenação ativo (0.2).
+    pub sort_criteria: fs_browser::SortCriteria,
+    /// Ordenação ascendente? (0.2).
+    pub sort_ascending: bool,
+    /// Termo de busca rápida para filtrar fotos por nome (0.2).
+    pub search_query: String,
+    /// Classificações/ratings da pasta atual (0.2).
+    pub sidecar: fs_browser::FolderSidecar,
+    /// Modal de informações EXIF aberto? (0.2).
+    pub exif_open: bool,
+    /// Metadados EXIF da foto atual (0.2).
+    pub exif_details: Option<crate::exif::ExifDetails>,
+    /// Modal de atalhos de teclado aberto? (0.1 P1).
+    pub help_open: bool,
+    /// Slideshow automático ativo? (0.3).
+    pub slideshow_active: bool,
+    /// Modo apresentação com UI oculta (0.3).
+    pub presentation_mode: bool,
 
     /// Mensagem da barra de status.
     pub status: String,
@@ -131,6 +209,10 @@ pub struct AppState {
     pub rename_open: bool,
     /// Modal de configurações aberto?
     pub settings_open: bool,
+    /// Modal de lote (0.5) aberto?
+    pub batch_open: bool,
+    /// Progresso da tarefa em lote (0.5).
+    pub batch_progress: Option<crate::batch::BatchProgress>,
     /// Texto digitado no modal de renomear.
     pub rename_buf: String,
 }
@@ -168,6 +250,8 @@ impl AppState {
     /// Estado inicial a partir de uma config carregada.
     #[must_use]
     pub fn from_config(config: AppConfig) -> Self {
+        let sort_criteria = fs_browser::SortCriteria::from_str_name(&config.sort_criteria);
+        let sort_ascending = config.sort_ascending;
         Self {
             config,
             photos: Vec::new(),
@@ -186,13 +270,26 @@ impl AppState {
             crop_aspect: 0,
             fullscreen: false,
             maximized: false,
+            compare: false,
+            compare_split: COMPARE_SPLIT_DEFAULT,
             format_filter: 0,
+            sort_criteria,
+            sort_ascending,
+            search_query: String::new(),
+            sidecar: fs_browser::FolderSidecar::default(),
+            exif_open: false,
+            exif_details: None,
+            help_open: false,
+            slideshow_active: false,
+            presentation_mode: false,
             status: String::from("Abra uma pasta ou fixe uma favorita para começar."),
             saving: false,
             // `usize::MAX` força o primeiro `apply_filter_if_changed`.
             applied_filter: usize::MAX,
             rename_open: false,
             settings_open: false,
+            batch_open: false,
+            batch_progress: None,
             rename_buf: String::new(),
         }
     }
@@ -373,6 +470,7 @@ pub fn open_dir_path(services: &Services, state: &mut AppState, dir: PathBuf) {
     state.tree = Some(root);
     state.current_dir = Some(dir.clone());
     state.config.last_folder = Some(dir.clone());
+    state.sidecar = fs_browser::FolderSidecar::load_for_dir(&dir);
     start_scan(services, state, dir, None);
 }
 
@@ -390,6 +488,7 @@ pub fn open_dir_and_select(
     state.tree = Some(root);
     state.current_dir = Some(dir.clone());
     state.config.last_folder = Some(dir.clone());
+    state.sidecar = fs_browser::FolderSidecar::load_for_dir(&dir);
 
     if target.is_file()
         && let Some(single) = PhotoPath::new(target.clone())
@@ -404,6 +503,7 @@ pub fn open_dir_and_select(
 /// Carrega as fotos de uma subpasta escolhida na árvore.
 pub fn open_subdir(services: &Services, state: &mut AppState, dir: &Path) {
     state.current_dir = Some(dir.to_path_buf());
+    state.sidecar = fs_browser::FolderSidecar::load_for_dir(dir);
     start_scan(services, state, dir.to_path_buf(), None);
 }
 
@@ -441,7 +541,10 @@ pub fn apply_scan_result(
             .position(|ph| ph.path() == p)
             .map(|i| (i, p))
     });
-    replace_photos(state, services, result.photos);
+    let mut photos = result.photos;
+    fs_browser::sort_photos(&mut photos, state.sort_criteria, state.sort_ascending);
+    state.sidecar = fs_browser::FolderSidecar::load_for_dir(&result.dir);
+    replace_photos(state, services, photos);
     if let Some((i, _)) = preserve
         && let Some(photo) = state.visible.get(i).cloned()
     {
@@ -460,7 +563,42 @@ pub fn replace_photos(state: &mut AppState, services: &Services, photos: Vec<Pho
     exit_crop_mode(state);
     // Força o refresh do filtro.
     state.applied_filter = usize::MAX;
-    apply_filter_if_changed(state, services);
+    recompute_visible(state, services);
+}
+
+/// Recomputa `visible` segundo filtros (formato + busca) e ordenação (0.2).
+pub fn recompute_visible(state: &mut AppState, services: &Services) {
+    let filter = FORMAT_FILTERS
+        .get(state.format_filter)
+        .copied()
+        .unwrap_or("Todas");
+    let query = state.search_query.trim().to_lowercase();
+    state.visible = state
+        .photos
+        .iter()
+        .filter(|p| {
+            matches_filter(p, filter)
+                && (query.is_empty() || p.display_name().to_lowercase().contains(&query))
+        })
+        .cloned()
+        .collect();
+    fs_browser::sort_photos(
+        &mut state.visible,
+        state.sort_criteria,
+        state.sort_ascending,
+    );
+    // Preserva a seleção se a foto continua visível.
+    if let Some(cur) = &state.current
+        && let Some(i) = state.visible.iter().position(|p| p == cur)
+    {
+        state.sel = Some(i);
+        return;
+    }
+    state.sel = None;
+    state.current = None;
+    if let Some(first) = state.visible.first().cloned() {
+        select_photo(state, services, 0, first);
+    }
 }
 
 /// Recomputa `visible` se o filtro mudou; preserva a foto atual.
@@ -469,40 +607,96 @@ pub fn apply_filter_if_changed(state: &mut AppState, services: &Services) -> boo
         return false;
     }
     state.applied_filter = state.format_filter;
-    let filter = FORMAT_FILTERS
-        .get(state.format_filter)
-        .copied()
-        .unwrap_or("Todas");
-    state.visible = state
-        .photos
-        .iter()
-        .filter(|p| matches_filter(p, filter))
-        .cloned()
-        .collect();
-    // Preserva a seleção se a foto continua visível.
-    if let Some(cur) = &state.current
-        && let Some(i) = state.visible.iter().position(|p| p == cur)
-    {
-        state.sel = Some(i);
-        return true;
-    }
-    state.sel = None;
-    state.current = None;
-    if let Some(first) = state.visible.first().cloned() {
-        select_photo(state, services, 0, first);
-    }
+    recompute_visible(state, services);
     true
+}
+
+/// Altera o critério e direção de ordenação (0.2).
+pub fn set_sort(
+    state: &mut AppState,
+    services: &Services,
+    criteria: fs_browser::SortCriteria,
+    ascending: bool,
+) {
+    state.sort_criteria = criteria;
+    state.sort_ascending = ascending;
+    state.config.sort_criteria = criteria.as_str_name().to_string();
+    state.config.sort_ascending = ascending;
+    state.config.save().ok();
+    fs_browser::sort_photos(&mut state.photos, criteria, ascending);
+    recompute_visible(state, services);
+}
+
+/// Altera a busca rápida por nome (0.2).
+pub fn set_search(state: &mut AppState, services: &Services, query: String) {
+    state.search_query = query;
+    recompute_visible(state, services);
+}
+
+/// Define a classificação (1..=5 estrelas) da foto atual no sidecar (0.2).
+pub fn rate_current_photo(state: &mut AppState, rating: u8) {
+    let Some(cur) = state.current.as_ref() else {
+        return;
+    };
+    let name = cur.display_name();
+    state.sidecar.set_rating(name, rating);
+    if let Some(ref dir) = state.current_dir {
+        let _ = state.sidecar.save_for_dir(dir);
+    }
+}
+
+/// Alterna modo slideshow (0.3).
+pub fn toggle_slideshow(state: &mut AppState) -> bool {
+    state.slideshow_active = !state.slideshow_active;
+    state.slideshow_active
+}
+
+/// Alterna modo apresentação (0.3).
+pub fn toggle_presentation(state: &mut AppState) -> bool {
+    state.presentation_mode = !state.presentation_mode;
+    state.presentation_mode
 }
 
 /// Seleciona a foto do índice, reiniciando edição e transformação.
 pub fn select_photo(state: &mut AppState, services: &Services, index: usize, photo: PhotoPath) {
     state.sel = Some(index);
     state.current = Some(photo.clone());
+    state.exif_details = crate::exif::ExifDetails::read_from(photo.path());
     services.images.select(&photo);
     state.editor.clear();
     exit_crop_mode(state);
     state.zoom = 1.0;
     state.offset = Vector2D::new(0.0, 0.0);
+}
+
+/// Move a foto atual para a lixeira do SO e avança a seleção.
+pub fn delete_current_photo(state: &mut AppState, services: &Services) {
+    let Some(cur) = state.current.clone() else {
+        return;
+    };
+    let path = cur.path().to_path_buf();
+    match fs_browser::delete_to_trash(&path) {
+        Ok(()) => {
+            services.thumbs.invalidate(&path);
+            state.photos.retain(|p| p.path() != path);
+            let prev_idx = state.sel.unwrap_or(0);
+            recompute_visible(state, services);
+            if !state.visible.is_empty() {
+                let next_idx = prev_idx.min(state.visible.len().saturating_sub(1));
+                if let Some(next_photo) = state.visible.get(next_idx).cloned() {
+                    select_photo(state, services, next_idx, next_photo);
+                }
+            } else {
+                state.sel = None;
+                state.current = None;
+                services.reset();
+            }
+            state.status = format!("{} movido para a lixeira.", cur.display_name());
+        }
+        Err(e) => {
+            state.status = format!("Falha ao mover para a lixeira: {e}");
+        }
+    }
 }
 
 /// Avança/retrocede `delta` fotos visíveis.
@@ -630,6 +824,37 @@ pub fn toggle_maximize(state: &mut AppState) {
         state.status = String::from("Painéis restaurados.");
     }
 }
+
+/// Liga/desliga o comparador original × editado.
+///
+/// Devolve o novo estado. O store é avisado separado: só lá se sabe quando
+/// vale subir a textura da imagem-base para a GPU.
+pub fn toggle_compare(state: &mut AppState) -> bool {
+    state.compare = !state.compare;
+    state.compare_split = COMPARE_SPLIT_DEFAULT;
+    state.status = if state.compare {
+        String::from("Comparador ligado — arraste a divisória.")
+    } else {
+        String::from("Comparador desligado.")
+    };
+    state.compare
+}
+
+/// Move a divisória do comparador para uma posição da largura da foto.
+///
+/// `fraction` é 0..=1 relativo à **largura desenhada da foto**, não à janela:
+/// a divisória acompanha o enquadramento (zoom/pan) em vez de sair da imagem
+/// quando a foto é menor que o palco.
+pub fn set_compare_split(state: &mut AppState, fraction: f32) {
+    // Um respiro nas pontas: em 0 ou 1 o "original" ou o "editado" fica com
+    // largura zero e o comparador parece quebrado.
+    state.compare_split = fraction.clamp(SPLIT_MIN, SPLIT_MAX);
+}
+
+/// Menor fração da divisória (evita lado invisível).
+pub const SPLIT_MIN: f32 = 0.02;
+/// Maior fração da divisória.
+pub const SPLIT_MAX: f32 = 0.98;
 
 /// Abre o modal de renomear, preenchendo com o nome atual.
 pub fn open_rename(state: &mut AppState) {
@@ -789,6 +1014,30 @@ mod tests {
         assert!(toggle_favorite(&mut state, dir));
         assert!(state.config.is_favorite(dir));
         assert!(!toggle_favorite(&mut state, dir));
+    }
+
+    #[test]
+    fn compare_toggles_and_recenters_the_divider() {
+        let mut state = AppState::from_config(AppConfig::default());
+        assert!(!state.compare);
+        assert!(toggle_compare(&mut state));
+        assert!(state.compare);
+        // Turning it on must not inherit a divider left at the edge from before.
+        state.compare_split = 0.9;
+        assert!(!toggle_compare(&mut state));
+        assert!(toggle_compare(&mut state));
+        assert_eq!(state.compare_split, COMPARE_SPLIT_DEFAULT);
+    }
+
+    #[test]
+    fn compare_divider_never_hides_a_side_entirely() {
+        let mut state = AppState::from_config(AppConfig::default());
+        set_compare_split(&mut state, -3.0);
+        assert_eq!(state.compare_split, SPLIT_MIN);
+        set_compare_split(&mut state, 9.0);
+        assert_eq!(state.compare_split, SPLIT_MAX);
+        set_compare_split(&mut state, 0.25);
+        assert_eq!(state.compare_split, 0.25);
     }
 
     #[test]

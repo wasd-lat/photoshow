@@ -78,6 +78,31 @@ impl Component for Toolbar {
                     .cross_align(Alignment::Center)
                     .spacing(m.gap(1.5))
                     .child(format_filter(&m, text_color, photos, services.clone()))
+                    .child(sort_select(&m, text_color, photos, services.clone()))
+                    .child(ui::icon_button(
+                        &m,
+                        "sliders-horizontal",
+                        "Ocultar/mostrar ajustes (Ctrl+3)",
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Config, |st| {
+                                st.config.hide_adjust = !st.config.hide_adjust;
+                                st.config.save().ok();
+                            })
+                        }),
+                    ))
+                    // O comparador só faz sentido com edição: escondido sem
+                    // ajuste, para não poluir a barra no visualizador puro.
+                    .maybe(dirty, |el| {
+                        el.child(ui::icon_button(
+                            &m,
+                            "columns-2",
+                            "Comparar com o original (Ctrl+B)",
+                            Button::new().flat().on_press(move |_| {
+                                let services = services.clone();
+                                super::shortcuts::toggle_compare(&services);
+                            }),
+                        ))
+                    })
                     .child(ui::icon_button(
                         &m,
                         "panel-left",
@@ -124,6 +149,32 @@ impl Component for Toolbar {
                     ))
                     .child(ui::icon_button(
                         &m,
+                        if photos.read().slideshow_active {
+                            "pause"
+                        } else {
+                            "play"
+                        },
+                        if photos.read().slideshow_active {
+                            "Pausar slideshow (Espaço)"
+                        } else {
+                            "Iniciar slideshow (Espaço)"
+                        },
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Photos, |st| {
+                                state::toggle_slideshow(st);
+                            });
+                        }),
+                    ))
+                    .child(ui::icon_button(
+                        &m,
+                        "info",
+                        "Informações da foto / EXIF (Ctrl+I)",
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Dialogs, |st| st.exif_open = true);
+                        }),
+                    ))
+                    .child(ui::icon_button(
+                        &m,
                         "fullscreen",
                         "Fullscreen (F11)",
                         Button::new().flat().on_press(move |_| {
@@ -138,6 +189,14 @@ impl Component for Toolbar {
                         "Configurações",
                         Button::new().flat().on_press(move |_| {
                             state::update(AppChannel::Dialogs, |st| st.settings_open = true);
+                        }),
+                    ))
+                    .child(ui::icon_button(
+                        &m,
+                        "help-circle",
+                        "Ajuda e atalhos de teclado (F1)",
+                        Button::new().flat().on_press(move |_| {
+                            state::update(AppChannel::Dialogs, |st| st.help_open = true);
                         }),
                     )),
             )
@@ -249,6 +308,14 @@ fn file_menu(
         }
     };
 
+    let do_batch = {
+        let mut open = open;
+        move |_| {
+            open.set(false);
+            state::update(AppChannel::Dialogs, |st| st.batch_open = true);
+        }
+    };
+
     let border_color = palette.border.to_color();
     let surface_color = palette.surface_primary.to_color();
 
@@ -302,6 +369,13 @@ fn file_menu(
             ))
         })
         .child(menu_divider(m, border_color))
+        .child(menu_entry(
+            m,
+            text_color,
+            "refresh-cw",
+            "Processar em lote…",
+            do_batch,
+        ))
         .child(menu_entry(
             m,
             text_color,
@@ -565,6 +639,70 @@ fn format_filter(
         ))
 }
 
+/// Dropdown de ordenação das fotos (0.2).
+fn sort_select(
+    m: &ui::Metrics,
+    text_color: Color,
+    photos: Radio<AppState, AppChannel>,
+    services: Services,
+) -> impl IntoElement {
+    let current_criteria = photos.read().sort_criteria;
+    let ascending = photos.read().sort_ascending;
+    let label = match current_criteria {
+        crate::fs_browser::SortCriteria::Name => "Nome",
+        crate::fs_browser::SortCriteria::Date => "Data",
+        crate::fs_browser::SortCriteria::Size => "Tam.",
+    };
+
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .spacing(m.gap(1.5))
+        .child(ui::text(m, ui::Role::Body, text_color, "Ordem:"))
+        .child(
+            Select::new().selected_item(label).children(
+                crate::fs_browser::SortCriteria::ALL
+                    .iter()
+                    .map(|(name, crit)| {
+                        let crit = *crit;
+                        let on_press: Press = {
+                            let services = services.clone();
+                            move |_| {
+                                state::update(AppChannel::Photos, |st| {
+                                    state::set_sort(st, &services, crit, ascending);
+                                });
+                            }
+                        }
+                        .into();
+                        MenuItem::new()
+                            .selected(crit == current_criteria)
+                            .on_press(on_press)
+                            .child(*name)
+                    }),
+            ),
+        )
+        .child(ui::icon_button(
+            m,
+            if ascending {
+                "chevron-up"
+            } else {
+                "chevron-down"
+            },
+            if ascending {
+                "Ordem crescente (clique para alternar)"
+            } else {
+                "Ordem decrescente (clique para alternar)"
+            },
+            Button::new().flat().on_press(move |_| {
+                let services = services.clone();
+                state::update(AppChannel::Photos, |st| {
+                    let next = !st.sort_ascending;
+                    state::set_sort(st, &services, st.sort_criteria, next);
+                });
+            }),
+        ))
+}
+
 /// Diálogo nativo de pasta (roda fora da thread de UI).
 pub fn open_folder_dialog(services: Services) {
     // A estação é capturada aqui (handler, com contexto) e movida para a task:
@@ -687,7 +825,17 @@ fn save_overwrite(
             st.saving = true;
             st.status = String::from("Salvando…");
         });
-        services.start_save(full, base, editor_state, dest, config.jpeg_quality, true);
+        // `source` = o próprio `dest`: o EXIF tem que ser lido antes do
+        // rename que sobrescreve a foto (ver `save_baked`).
+        services.start_save(
+            full,
+            base,
+            editor_state,
+            dest.clone(),
+            config.jpeg_quality,
+            true,
+            Some(dest),
+        );
     });
 }
 
@@ -697,7 +845,7 @@ fn save_as_dialog(
     photos: Radio<AppState, AppChannel>,
     edit: Radio<AppState, AppChannel>,
 ) {
-    let (_, full, base) = collect_save_input(photos, &services);
+    let (source, full, base) = collect_save_input(photos, &services);
     let name = photos
         .read()
         .current
@@ -736,6 +884,6 @@ fn save_as_dialog(
             st.saving = true;
             st.status = String::from("Salvando…");
         });
-        services.start_save(full, base, editor_state, dest, quality, false);
+        services.start_save(full, base, editor_state, dest, quality, false, source);
     });
 }

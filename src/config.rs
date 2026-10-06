@@ -61,9 +61,43 @@ pub struct AppConfig {
     /// Recolhe a lista de fotos (lado esquerdo, baixo).
     #[serde(default)]
     pub hide_photos: bool,
+    /// Recolhe o painel de ajustes (Ctrl+3).
+    #[serde(default)]
+    pub hide_adjust: bool,
     /// Contorno de foco sempre visível nos botões.
     #[serde(default)]
     pub always_focus_ring: bool,
+    /// Critério de ordenação: "name", "date", "size".
+    #[serde(default = "default_sort_criteria")]
+    pub sort_criteria: String,
+    /// Ordenação ascendente?
+    #[serde(default = "default_true")]
+    pub sort_ascending: bool,
+    /// Intervalo do slideshow em segundos (1..=60).
+    #[serde(default = "default_slideshow_interval")]
+    pub slideshow_interval_secs: u64,
+    /// Proporção (%) da largura do navegador no dock (12..=50).
+    #[serde(default = "default_dock_browser")]
+    pub dock_browser_percent: f32,
+    /// Proporção (%) da altura da galeria no dock (8..=50).
+    #[serde(default = "default_dock_gallery")]
+    pub dock_gallery_percent: f32,
+}
+
+fn default_sort_criteria() -> String {
+    String::from("name")
+}
+
+fn default_slideshow_interval() -> u64 {
+    3
+}
+
+fn default_dock_browser() -> f32 {
+    24.0
+}
+
+fn default_dock_gallery() -> f32 {
+    20.0
 }
 
 fn default_true() -> bool {
@@ -114,7 +148,13 @@ impl Default for AppConfig {
             hide_gallery: false,
             hide_tree: false,
             hide_photos: false,
+            hide_adjust: false,
             always_focus_ring: false,
+            sort_criteria: String::from("name"),
+            sort_ascending: true,
+            slideshow_interval_secs: 3,
+            dock_browser_percent: 24.0,
+            dock_gallery_percent: 20.0,
         }
     }
 }
@@ -156,14 +196,31 @@ impl AppConfig {
     }
 
     /// Carrega de um caminho explícito (usado em testes).
+    /// Se o JSON estiver corrompido, cria backup e recupera com padrões (Config Recovery).
     #[must_use]
     pub fn load_from(path: &Path) -> Option<Self> {
         let text = std::fs::read_to_string(path).ok()?;
-        let mut cfg: Self = serde_json::from_str(&text).ok()?;
+        let parsed = serde_json::from_str::<Self>(&text);
+        let mut cfg = match parsed {
+            Ok(c) => c,
+            Err(_) => {
+                // Config corrompida: faz backup para o usuário não perder dados
+                let unique = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let backup_path = path.with_extension(format!("corrupt-{unique}.bak"));
+                let _ = std::fs::copy(path, backup_path);
+                Self::default()
+            }
+        };
         cfg.jpeg_quality = cfg.jpeg_quality.clamp(1, 100);
         cfg.prefetch_max_mb = cfg.prefetch_max_mb.min(1024);
         cfg.thumb_size = cfg.thumb_size.clamp(48.0, 192.0);
         cfg.ui_scale = sanitize_ui_scale(cfg.ui_scale);
+        cfg.dock_browser_percent = cfg.dock_browser_percent.clamp(12.0, 50.0);
+        cfg.dock_gallery_percent = cfg.dock_gallery_percent.clamp(8.0, 50.0);
+        cfg.slideshow_interval_secs = cfg.slideshow_interval_secs.clamp(1, 60);
         // Remove favoritas que não existem mais.
         cfg.favorites.retain(|p| p.is_dir());
         Some(cfg)
@@ -175,13 +232,25 @@ impl AppConfig {
         self.save_to(&path)
     }
 
-    /// Persiste num caminho explícito (usado em testes).
+    /// Persiste num caminho explícito de forma atômica (grava em temporário e renomeia).
     pub fn save_to(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, text).map_err(|e| e.to_string())
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = path.with_extension(format!("tmp-{unique}"));
+        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        if let Ok(f) = std::fs::File::open(&tmp) {
+            let _ = f.sync_all();
+        }
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        })
     }
 
     /// Alterna favorito; `true` se fixou, `false` se desafixou.
@@ -256,10 +325,17 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_file_falls_back_to_none() {
+    fn corrupt_file_recovers_to_defaults_and_makes_backup() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.json");
         std::fs::write(&path, "{ invalido").expect("write");
-        assert!(AppConfig::load_from(&path).is_none());
+        let recovered = AppConfig::load_from(&path).expect("deve recuperar");
+        assert_eq!(recovered.jpeg_quality, 90);
+        let baks: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+            .collect();
+        assert!(!baks.is_empty(), "backup do arquivo corrompido ausente");
     }
 }

@@ -93,6 +93,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      - name: compute sha256 checksums
+        run: |
+          sha256sum photoshow* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -100,5 +103,6 @@ jobs:
             photoshow_*.deb
             photoshow-*.rpm
             photoshow-*.zip
+            SHA256SUMS
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, 'rc') }}

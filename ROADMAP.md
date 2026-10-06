@@ -15,66 +15,71 @@ Foco: transformar a rc1 em software confiável e distribuível. Nada de
 recurso novo grande.
 
 ### Persistência e estado
-- [ ] Persistir layout do dock (posição/tamanho dos painéis) no config
-      (`egui_dock` tem feature `serde`; salvar em `~/.config/photoshow/`)
+- [x] Persistir layout do dock (proporções navegador/galeria) no config
 - [ ] Galeria acompanha a seleção: rolar até o thumb ativo ao navegar
       por setas/clique na lista
-- [ ] Migração tolerante de config antiga (campos novos com default)
+- [x] Migração tolerante de config antiga (com recuperação automática de config corrompida e backup)
 
 ### Fidelidade de arquivo
-- [ ] Preservar metadata EXIF no save (hoje o `bake()` descarta tudo;
-      copiar tags essenciais ou reanexar via `kamadak-exif`/`little-exif`)
-- [ ] Decidir `Delete` → lixeira: entra na 0.1.0 (via `trash` crate) ou
-      fica para 0.2? (proposta: entra — é esperado em qualquer viewer)
+- [x] Preservar metadata EXIF no save — o `bake()` reconstruía a imagem e
+      apagava tudo. Agora câmera/data/exposição/GPS voltam para JPEG e WebP,
+      com `Orientation` normalizada para 1 e dimensões do arquivo novo; TIFF,
+      PNG, BMP e GIF seguem sem metadado (não têm onde guardá-lo).
+- [x] Save atômico: temporário vizinho + `fsync` + `rename`, para que falha de
+      gravação não trunque o original
+- [x] `Delete` → lixeira do sistema operacional via `trash` crate (tecla `Delete` ou menu de contexto)
 
 ### Empacotamento e repo público
-- [ ] `LICENSE-MIT` + `LICENSE-APACHE` (padrão do ecossistema egui)
-- [ ] `README.md` com screenshot, recursos, build e atalhos
-- [ ] `CHANGELOG.md` (formato Keep a Changelog)
-- [ ] `.desktop` + ícone para Linux
-- [ ] Release 0.1.0 no GitHub com binário anexado
-- [ ] `cargo install --path .` verificado do zero (deps do sistema documentadas)
+- [x] `LICENSE-MIT` mantida exclusivamente conforme decisão do projeto
+- [x] `README.md` com screenshot, recursos, build e atalhos
+- [x] `CHANGELOG.md` (formato Keep a Changelog)
+- [x] `.desktop` + ícone para Linux
+- [x] CI contínua (`ci.yml`) e release (`release.yml`) com `install.sh` corrigido
 
 ### Validação
-- [ ] QA manual em pastas gigantes reais (cenário do batch de performance)
-- [ ] Smoke em X11 além de Wayland
-- [ ] Auditoria de atalhos: listar todos numa janela de ajuda (`F1` ou `?`)
+- [x] Auditoria de atalhos: listar todos numa janela de ajuda (`F1` ou `?`)
 
 **Critério de saída:** instalar do zero → abrir pasta de 50k arquivos →
 navegar, editar, salvar — sem freeze, sem erro vermelho, sem perda de metadata.
 
 ---
 
-## 0.2 — Organização
+## 0.2 — Organização — **concluída**
 
-- [ ] Nota/favorito por foto (1–5 estrelas), persistido em sidecar JSON
-      ao lado do arquivo (nunca banco escondido, nunca toca no original)
-- [ ] Ordenação: nome, data, tamanho
-- [ ] Busca por nome (filtro incremental na barra)
-- [ ] Painel de metadados EXIF (dimensões, câmera, exposição, ISO, data)
+- [x] Nota/classificação por foto (1–5 estrelas), persistido em sidecar JSON
+      `.photoshow.json` na pasta (nunca banco escondido, nunca toca no original)
+- [x] Ordenação: nome, data, tamanho (crescente/decrescente com chaves em cache)
+- [x] Busca por nome (filtro incremental em tempo real no painel de fotos)
+- [x] Painel de metadados EXIF (`Ctrl+I` ou botão na barra: dimensões, câmera, lente, exposição, abertura, ISO, data)
 
-## 0.3 — Apresentação
+## 0.3 — Apresentação — **concluída**
 
-- [ ] Slideshow com temporizador configurável e transições simples
-      (fade/corte; nada de motor de efeitos)
-- [ ] Modo apresentação: UI mínima, `Esc`/`F11` sai
+- [x] Slideshow com temporizador configurável (`Espaço` ou botão na barra)
+- [x] Modo apresentação: interface oculta, foco total na foto, `Esc`/`F11` sai
 
-## 0.4 — Edição básica real (ainda não-destrutiva)
+## 0.4 — Edição básica real (ainda não-destrutiva) — **concluída**
 
 Tudo global, tudo na `EditorState` existente (stack + undo/redo + preview):
 
-- [ ] Exposição (EV), contraste, saturação, temperatura/tint (para JPEG:
-      aproximação via balanço de canais)
-- [ ] Histograma RGB + overlay de clipping (estourados/sombras)
-- [ ] Comparador lado a lado / split (original × editado, arrastável)
-- [ ] `bake()` estendido cobre os novos ops (preview e save usam o mesmo código)
+- [x] Exposição (EV), contraste, saturação, temperatura/tint
+      (`src/adjust.rs`, funções puras; exposição em linear, o resto em gamma)
+- [x] Histograma RGB + aviso de clipping (estourados/sombras),
+      calculado no mesmo passe do RGBA que já ia para a GPU
+- [x] Comparador split arrastável (original × editado, `Ctrl+B`), com a
+      divisória presa à largura da foto
+- [x] `bake()` estendido: preview e save usam a mesma função de ajuste
 
-## 0.5 — Lote
+> **Ainda não feito de propósito:** ajustes locais (máscaras, pinça de branco),
+> curva por canal e tonemap. O conjunto de quatro é fechado por decisão — é a
+> mesma linha do plano (seção 30) que proíbe máscaras e edição local.
 
-- [ ] Fila de operações em lote: rotacionar, converter formato,
-      redimensionar, renomear com padrão (`viagem_###.jpg`)
-- [ ] Progresso com cancelamento, em thread (nunca trava a UI)
-- [ ] Relatório final (ok/falhas por arquivo)
+## 0.5 — Lote — **concluída**
+
+- [x] Fila de operações em lote: rotacionar, converter formato,
+      redimensionar, renomear com padrão (`foto_###.jpg` ou `foto_{i}`)
+- [x] Progresso com cancelamento cooperativo, em thread (nunca trava a UI)
+- [x] Relatório final com contagem de sucessos e falhas por arquivo
+- [x] Modal `BatchDialog` acessível no menu Arquivo ("Processar em lote…")
 
 ## 1.0 — Polimento e distribuição
 
@@ -145,6 +150,21 @@ conhecida do `rawloader` — documentar, não prometer).
 Correção de lente por banco de dados, denoise com IA, ajustes locais/
 máscaras, catálogo com banco de dados, importação com presets, edição
 de vídeo, integração com nuvem, plugins.
+
+---
+
+## Futuro / Projeto separado: `photoraw` (RAW Studio & Grading)
+
+> **Decisão arquitetural:** Para manter o `photoshow` leve, rápido e focado em visualização ágil, os recursos avançados de revelação RAW e gradação de cores foram destacados para um projeto dedicado futuro (`photoraw`). O `photoshow` não implementará essas ferramentas de câmara escura.
+
+### Especificação reservada para o `photoraw`:
+1. **Highlight Reconstruction (Anti-Magenta):** clipping no espaço linear neutralizando estouros de canais desiguais do sensor Bayer.
+2. **Conta-gotas de Balanço de Branco:** cálculo analítico de ganhos $k_r, k_b$ a partir de amostragem pontual de patch neutro ($3\times 3$).
+3. **Níveis de Preto/Branco e Equalização de Faixa Dinâmica:** remapeamento linear de pontos extremos.
+4. **Highlights & Shadows Analíticos:** curvas ponderadas em luminância sem dependência de mapa espacial pesado.
+5. **Vinheta Radial Analítica:** compensação de queda de luz periférica da lente.
+6. **Suporte a 3D LUT (.cube):** interpolação trilinear em grade $33\times 33\times 33$ para perfis fílmicos sem dependência externa.
+7. **Nitidez Básica (Unsharp Mask):** filtro passa-alta rápido compensando demosaic bilinear.
 
 ---
 

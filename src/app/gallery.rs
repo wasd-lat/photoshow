@@ -42,7 +42,11 @@ impl Component for Gallery {
             return rect()
                 .expanded()
                 .padding(ui::gaps(&m, 2.5, 2.5))
-                .child(ui::faint(&m, faint_c, "Galeria desativada — ative em Config."));
+                .child(ui::faint(
+                    &m,
+                    faint_c,
+                    "Galeria desativada — ative em Config.",
+                ));
         }
         if snapshot.visible.is_empty() {
             return rect()
@@ -106,12 +110,7 @@ fn size_controls(m: &ui::Metrics, faint: Color, cell: f32) -> impl IntoElement {
                 .flat()
                 .on_press(move |_| set_thumb_size(cell + 16.0)),
         ))
-        .child(ui::text(
-            m,
-            ui::Role::Small,
-            faint,
-            format!("{cell:.0}px"),
-        ))
+        .child(ui::text(m, ui::Role::Small, faint, format!("{cell:.0}px")))
 }
 
 /// Aplica e persiste o tamanho do thumbnail.

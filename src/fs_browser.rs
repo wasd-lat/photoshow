@@ -32,6 +32,116 @@ impl PhotoPath {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.0.to_string_lossy().into_owned())
     }
+
+    /// Data de modificação (fallback: Unix Epoch).
+    #[must_use]
+    pub fn modified_time(&self) -> std::time::SystemTime {
+        std::fs::metadata(&self.0)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    }
+
+    /// Tamanho do arquivo em bytes (fallback: 0).
+    #[must_use]
+    pub fn file_size(&self) -> u64 {
+        std::fs::metadata(&self.0).map(|m| m.len()).unwrap_or(0)
+    }
+}
+
+/// Critérios de ordenação das fotos (0.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SortCriteria {
+    #[default]
+    Name,
+    Date,
+    Size,
+}
+
+impl SortCriteria {
+    pub const ALL: &[(&'static str, Self)] = &[
+        ("Nome", Self::Name),
+        ("Data", Self::Date),
+        ("Tamanho", Self::Size),
+    ];
+
+    #[must_use]
+    pub fn from_str_name(s: &str) -> Self {
+        match s {
+            "date" => Self::Date,
+            "size" => Self::Size,
+            _ => Self::Name,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str_name(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Date => "date",
+            Self::Size => "size",
+        }
+    }
+}
+
+/// Ordena fotos segundo o critério e direção especificados.
+pub fn sort_photos(photos: &mut [PhotoPath], criteria: SortCriteria, ascending: bool) {
+    match criteria {
+        SortCriteria::Name => {
+            photos.sort_by_cached_key(|p| p.display_name().to_lowercase());
+        }
+        SortCriteria::Date => {
+            photos.sort_by_cached_key(|p| p.modified_time());
+        }
+        SortCriteria::Size => {
+            photos.sort_by_cached_key(|p| p.file_size());
+        }
+    }
+    if !ascending {
+        photos.reverse();
+    }
+}
+
+/// Guarda classificações (estrelas 1..=5) persistidas no sidecar `.photoshow.json` da pasta (0.2).
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct FolderSidecar {
+    #[serde(default)]
+    pub ratings: std::collections::HashMap<String, u8>,
+}
+
+impl FolderSidecar {
+    #[must_use]
+    pub fn load_for_dir(dir: &Path) -> Self {
+        let sidecar_path = dir.join(".photoshow.json");
+        std::fs::read_to_string(sidecar_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_for_dir(&self, dir: &Path) -> Result<(), String> {
+        let sidecar_path = dir.join(".photoshow.json");
+        let content = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = dir.join(format!(".photoshow.json.tmp-{unique}"));
+        std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, sidecar_path).map_err(|e| e.to_string())
+    }
+
+    #[must_use]
+    pub fn get_rating(&self, photo_name: &str) -> u8 {
+        self.ratings.get(photo_name).copied().unwrap_or(0)
+    }
+
+    pub fn set_rating(&mut self, photo_name: String, rating: u8) {
+        if rating == 0 {
+            self.ratings.remove(&photo_name);
+        } else {
+            self.ratings.insert(photo_name, rating.clamp(1, 5));
+        }
+    }
 }
 
 /// Verifica extensão (case-insensitive).
@@ -90,7 +200,7 @@ fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64) {
             photos.push(p);
         }
     }
-    photos.sort_by_cached_key(|p| p.display_name().to_lowercase());
+    sort_photos(&mut photos, SortCriteria::Name, true);
     (photos, files_seen)
 }
 
@@ -112,7 +222,7 @@ pub fn scan_blocking(dir: PathBuf, opts: ScanOptions) -> ScanResult {
 #[must_use]
 pub fn filter_loose_files(paths: Vec<PathBuf>) -> Vec<PhotoPath> {
     let mut photos: Vec<PhotoPath> = paths.into_iter().filter_map(PhotoPath::new).collect();
-    photos.sort_by_cached_key(|p| p.display_name().to_lowercase());
+    sort_photos(&mut photos, SortCriteria::Name, true);
     photos
 }
 
@@ -143,6 +253,11 @@ pub fn is_hidden(path: &Path) -> bool {
     path.file_name()
         .map(|n| n.to_string_lossy().starts_with('.'))
         .unwrap_or(false)
+}
+
+/// Move uma foto para a lixeira do sistema operacional de forma segura.
+pub fn delete_to_trash(path: &Path) -> Result<(), String> {
+    trash::delete(path).map_err(|e| format!("lixeira: {e}"))
 }
 
 /// Renomeia uma foto dentro da mesma pasta. Erro em texto para a status bar.

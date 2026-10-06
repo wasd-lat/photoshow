@@ -54,7 +54,20 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
         return true;
     }
 
-    // Painéis: Ctrl+1 / Ctrl+2 recolhem navegador e galeria.
+    // Espaço: alternar slideshow
+    if code == Code::Space && !ctrl && !shift {
+        state::update(AppChannel::Photos, |st| {
+            state::toggle_slideshow(st);
+        });
+        return true;
+    }
+
+    if ctrl && code == Code::KeyI {
+        state::update(AppChannel::Dialogs, |st| st.exif_open = true);
+        return true;
+    }
+
+    // Painéis: Ctrl+1 / Ctrl+2 / Ctrl+3 recolhem navegador, galeria e ajustes.
     // Ctrl+Shift+1 / Ctrl+Shift+2 recolhem árvore e lista de fotos.
     if ctrl && code == Code::Digit1 {
         if shift {
@@ -70,6 +83,15 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
         } else {
             toggle_panel(Panel::Gallery);
         }
+        return true;
+    }
+    if ctrl && code == Code::Digit3 {
+        toggle_panel(Panel::Adjust);
+        return true;
+    }
+    // Comparador: Ctrl+B alterna original × editado.
+    if ctrl && code == Code::KeyB && !shift {
+        toggle_compare(&services);
         return true;
     }
     if ctrl && code == Code::Digit0 {
@@ -109,6 +131,32 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
         });
         return true;
     }
+    if !ctrl && !shift && !state::snapshot().crop_mode {
+        match code {
+            Code::Digit1 | Code::Numpad1 => {
+                state::update(AppChannel::Photos, |st| state::rate_current_photo(st, 1));
+                return true;
+            }
+            Code::Digit2 | Code::Numpad2 => {
+                state::update(AppChannel::Photos, |st| state::rate_current_photo(st, 2));
+                return true;
+            }
+            Code::Digit3 | Code::Numpad3 => {
+                state::update(AppChannel::Photos, |st| state::rate_current_photo(st, 3));
+                return true;
+            }
+            Code::Digit4 | Code::Numpad4 => {
+                state::update(AppChannel::Photos, |st| state::rate_current_photo(st, 4));
+                return true;
+            }
+            Code::Digit5 | Code::Numpad5 => {
+                state::update(AppChannel::Photos, |st| state::rate_current_photo(st, 5));
+                return true;
+            }
+            _ => {}
+        }
+    }
+
     match code {
         Code::Minus | Code::NumpadSubtract => {
             zoom_by(1.0 / 1.2);
@@ -119,6 +167,9 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
             true
         }
         Code::Digit0 | Code::Numpad0 => {
+            if !ctrl && !shift && !state::snapshot().crop_mode {
+                state::update(AppChannel::Photos, |st| state::rate_current_photo(st, 0));
+            }
             viewer(|st| {
                 st.zoom = 1.0;
                 st.offset = Vector2D::new(0.0, 0.0);
@@ -133,6 +184,10 @@ pub fn apply(e: &Event<KeyboardEventData>) -> bool {
 fn named_shortcut(key: NamedKey, services: Services) -> bool {
     if key == NamedKey::Escape {
         return escape();
+    }
+    if key == NamedKey::F1 {
+        state::update(AppChannel::Dialogs, |st| st.help_open = true);
+        return true;
     }
     if key == NamedKey::F11 {
         return toggle_fullscreen();
@@ -151,6 +206,10 @@ fn named_shortcut(key: NamedKey, services: Services) -> bool {
     }
     if key == NamedKey::ArrowLeft {
         photos(|st| state::step(st, &services, -1));
+        return true;
+    }
+    if key == NamedKey::Delete {
+        photos(|st| state::delete_current_photo(st, &services));
         return true;
     }
     if key == NamedKey::Enter {
@@ -175,6 +234,8 @@ pub enum Panel {
     Tree,
     /// Lista de fotos (baixo do navegador).
     Photos,
+    /// Painel de ajustes (histograma + sliders).
+    Adjust,
 }
 
 /// Recolhe/expande um painel e persiste (função pura de decisão).
@@ -192,6 +253,7 @@ pub fn toggle_panel(panel: Panel) {
         Panel::Gallery => st.config.hide_gallery = next_visibility(st.config.hide_gallery),
         Panel::Tree => st.config.hide_tree = next_visibility(st.config.hide_tree),
         Panel::Photos => st.config.hide_photos = next_visibility(st.config.hide_photos),
+        Panel::Adjust => st.config.hide_adjust = next_visibility(st.config.hide_adjust),
     });
     state::update(AppChannel::Config, |st| {
         st.config.save().ok();
@@ -205,6 +267,7 @@ pub fn restore_panels() {
         st.config.hide_gallery = false;
         st.config.hide_tree = false;
         st.config.hide_photos = false;
+        st.config.hide_adjust = false;
         st.config.save().ok();
     });
 }
@@ -217,13 +280,24 @@ pub fn scale_ui(delta: f32) {
     });
 }
 
-/// `Esc`: fecha modal, sai de fullscreen ou cancela o crop (nesta ordem).
+/// `Esc`: fecha modal, sai de apresentação, fullscreen ou cancela o crop.
 fn escape() -> bool {
-    if state::snapshot().rename_open || state::snapshot().settings_open {
-        state::update(AppChannel::Dialogs, |st| {
+    let mut dialog_closed = false;
+    state::update(AppChannel::Dialogs, |st| {
+        if st.rename_open || st.settings_open || st.help_open || st.exif_open {
             st.rename_open = false;
             st.settings_open = false;
-        });
+            st.help_open = false;
+            st.exif_open = false;
+            dialog_closed = true;
+        }
+    });
+    if dialog_closed {
+        return true;
+    }
+    let presentation = state::snapshot().presentation_mode;
+    if presentation {
+        state::update(AppChannel::Photos, |st| st.presentation_mode = false);
         return true;
     }
     let fullscreen = state::snapshot().fullscreen;
@@ -253,6 +327,18 @@ pub fn toggle_fullscreen() -> bool {
     viewer(|st| st.fullscreen = next);
     window::set_fullscreen(next);
     true
+}
+
+/// Alterna o comparador original × editado (botão e atalho `Ctrl+B`).
+///
+/// Mantida aqui — e não em dois handlers — porque o toggle mexe em dois
+/// lugares de uma vez (o flag do `Viewer` e a textura no `ImageStore`), e
+/// duas cópias da mesma sequência divergem na primeira correção.
+pub fn toggle_compare(services: &Services) {
+    let mut radio = state::station().write_channel(AppChannel::Viewer);
+    let on = state::toggle_compare(&mut radio);
+    drop(radio);
+    services.images.set_compare(on);
 }
 
 // Atalhos de escrita por canal, sem hook (chamados de handlers).

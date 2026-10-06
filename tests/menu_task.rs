@@ -177,3 +177,70 @@ fn background_work_from_a_menu_item_survives_the_menu_closing() {
         "a task de background morreu junto com o menu: use `services::background` (spawn_forever), não `spawn`"
     );
 }
+
+/// O Viewer monta de verdade e aceita o decode no meio.
+#[derive(PartialEq, Clone)]
+struct ViewerHarness {
+    photo_path: std::path::PathBuf,
+    seen_loaded: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl Component for ViewerHarness {
+    fn render(&self) -> impl IntoElement {
+        use freya::radio::use_init_radio_station;
+        use photoshow::app::services::Services;
+        use photoshow::app::state::{AppChannel, AppState};
+        use photoshow::config::AppConfig;
+        use photoshow::fs_browser::PhotoPath;
+
+        use_init_radio_station::<AppState, AppChannel>(|| {
+            AppState::from_config(AppConfig::default())
+        });
+        // `Services::new()` cria `State`: só funciona DENTRO de um escopo
+        // Freya ativo, nunca solto no corpo do `#[test]`.
+        let services = use_hook(Services::new);
+        use_provide_context(|| services.clone());
+        let mut selected = use_state(|| false);
+        if !*selected.peek()
+            && let Some(photo) = PhotoPath::new(self.photo_path.clone())
+        {
+            selected.set(true);
+            services.images.select(&photo);
+        }
+        // No headless testing os timers de background rodam em lock-step com
+        // o `poll`, mas a thread de decode roda no SO: um `tick()` explícito
+        // no render garante que o canal é drenado a cada frame do teste.
+        services.tick();
+        if services.load.read().display_px() != (0, 0) {
+            self.seen_loaded.set(true);
+        }
+        photoshow::app::viewer::Viewer
+    }
+}
+
+#[test]
+fn viewer_survives_the_empty_to_loaded_transition() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("hook.png");
+    image::RgbImage::new(32, 24).save(&path).expect("fixture");
+
+    let seen_loaded = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut runner = launch_test({
+        let path = path.clone();
+        let seen_loaded = seen_loaded.clone();
+        move || ViewerHarness {
+            photo_path: path.clone(),
+            seen_loaded: seen_loaded.clone(),
+        }
+    });
+    // O decode roda em background e o pump troca `LoadState::Empty` para
+    // `Loaded` no mesmo componente: um hook dentro do braço `Loaded` mudaria
+    // a contagem de hooks entre frames e o Freya abortaria aqui.
+    for _ in 0..60 {
+        runner.poll(Duration::from_millis(10), Duration::from_millis(50));
+    }
+    assert!(
+        seen_loaded.get(),
+        "a foto nunca carregou: o teste não exercitou o braço Loaded"
+    );
+}

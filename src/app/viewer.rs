@@ -40,10 +40,17 @@ impl Component for Viewer {
         let mut crop_rect = use_state(|| None::<ScreenRect>);
         let drag = use_state(|| None::<crop::DragKind>);
 
-        let (zoom, offset, crop_mode, aspect) = {
+        let (zoom, offset, crop_mode, aspect, compare, split) = {
             let radio = channel(AppChannel::Viewer);
             let st = radio.read();
-            (st.zoom, st.offset, st.crop_mode, st.crop_aspect)
+            (
+                st.zoom,
+                st.offset,
+                st.crop_mode,
+                st.crop_aspect,
+                st.compare,
+                st.compare_split,
+            )
         };
         let ratio = state::crop_ratio(aspect);
 
@@ -56,12 +63,7 @@ impl Component for Viewer {
         let _ = services.crop_cmd.read();
         if let Some(cmd) = services.take_crop_cmd() {
             let area_now = *area.read();
-            let draw = compute_draw(
-                area_now,
-                services.load.read().display_px(),
-                zoom,
-                offset,
-            );
+            let draw = compute_draw(area_now, services.load.read().display_px(), zoom, offset);
             match cmd {
                 CropCommand::Apply => {
                     let rect = crop_rect().map(|r| crop_to_screen(r, area_now));
@@ -101,6 +103,8 @@ impl Component for Viewer {
             LoadState::Loaded { image: handle, .. } => {
                 let dims = load.display_px();
                 let draw = compute_draw(*area.read(), dims, zoom, offset);
+                let has_original = load.base_image().is_some();
+                let original = load.base_image().cloned();
 
                 let on_wheel = move |e: Event<WheelEventData>| {
                     let factor = wheel_factor(&e);
@@ -138,6 +142,14 @@ impl Component for Viewer {
                         }
                         if crop_mode {
                             start_crop(crop_rect, drag, p);
+                        } else if compare
+                            && has_original
+                            && hit_divider(p, *area.read(), draw, split)
+                        {
+                            // Clicar na divisória arrasta a divisória — nunca
+                            // faz pan. Sem isso o gesto mais óbvio do
+                            // comparador seria competido pelo pan da foto.
+                            drag.set(Some(crop::DragKind::Compare));
                         } else if can_pan(*area.read(), dims, zoom) {
                             drag.set(Some(crop::DragKind::Pan(at)));
                         }
@@ -147,6 +159,7 @@ impl Component for Viewer {
                 let on_move = {
                     let crop_rect = crop_rect;
                     let mut drag = drag;
+                    let draw_for_compare = draw;
                     move |e: Event<PointerEventData>| {
                         let Some(kind) = drag() else {
                             return;
@@ -168,6 +181,13 @@ impl Component for Viewer {
                                 let draw = compute_draw(area_now, dims, zoom, offset);
                                 update_crop(crop_rect, inner, p, draw, area_now, ratio);
                             }
+                            crop::DragKind::Compare => {
+                                let fraction = (at.x as f32 - draw_for_compare.min_x())
+                                    / draw_for_compare.width().max(1.0);
+                                state::update(AppChannel::Viewer, |st| {
+                                    state::set_compare_split(st, fraction);
+                                });
+                            }
                         }
                     }
                 };
@@ -178,26 +198,39 @@ impl Component for Viewer {
                     .overflow(Overflow::Clip)
                     // `draw` é o retângulo que a imagem deve ocupar: sem
                     // dimensioná-lo, zoom e pan não mudariam nada na tela.
-                    .child(
-                        image(handle.clone())
-                            .width(Size::px(draw.width()))
-                            .height(Size::px(draw.height()))
-                            // `draw` e `area` vêm do `on_sized`, ou seja, em
-                            // coordenadas **de tela**. `Position::Absolute`
-                            // interpreta `left/top` a partir do pai, então
-                            // passar a coordenada de tela aqui a somaria duas
-                            // vezes (uma via pai, outra via o próprio valor) e
-                            // jogaria a imagem para fora da janela. A diferença
-                            // entre as duas é o offset relativo correto.
-                            .position(
-                                Position::new_absolute()
-                                    .left(draw.min_x() - area.read().min_x())
-                                    .top(draw.min_y() - area.read().min_y()),
+                    .child(photo(
+                        handle.clone(),
+                        draw,
+                        *area.read(),
+                        None,
+                        "Foto exibida",
+                    ))
+                    // Comparador: a base entra por cima, recortada à esquerda da
+                    // divisória. Dois nós com `Clip` valem mais que shader.
+                    .maybe(compare && has_original && !crop_mode, {
+                        move |el| {
+                            let (offset, width) = compare_rect(draw, *area.read(), split);
+                            el.child(
+                                rect()
+                                    .position(Position::new_absolute().left(offset.x).top(offset.y))
+                                    .width(Size::px(width.max(0.0)))
+                                    .height(Size::px(draw.height()))
+                                    .overflow(Overflow::Clip)
+                                    .child(photo(
+                                        original.clone().expect("base presente"),
+                                        draw,
+                                        *area.read(),
+                                        None,
+                                        "Foto original",
+                                    )),
                             )
-                            .aspect_ratio(AspectRatio::None)
-                            .sampling_mode(SamplingMode::Mitchell)
-                            .a11y_alt("Foto exibida"),
-                    )
+                            .child(compare_handle(
+                                offset.x + width,
+                                offset.y,
+                                draw.height(),
+                            ))
+                        }
+                    })
                     .child(crop_overlay(draw, crop_rect(), crop_mode, *area.read()))
                     .on_wheel(on_wheel)
                     .on_pointer_down(on_down)
@@ -444,6 +477,93 @@ pub fn draw_to_local(draw: ScreenRect, area: ScreenRect) -> ScreenRect {
     )
 }
 
+/// Nó da foto, posicionado em `draw` dentro da área do viewer.
+///
+/// Fatorado porque o comparador desenha a imagem duas vezes (original e
+/// editada) e as duas têm que ocupar exatamente o mesmo retângulo: se
+/// divergirem 1px, o split fica torto.
+fn photo(
+    handle: ImageHandle,
+    draw: ScreenRect,
+    area: ScreenRect,
+    _border: Option<Color>,
+    alt: &'static str,
+) -> Element {
+    image(handle)
+        .width(Size::px(draw.width()))
+        .height(Size::px(draw.height()))
+        // `draw` e `area` vêm do `on_sized`, ou seja, em coordenadas **de
+        // tela**. `Position::Absolute` interpreta `left/top` a partir do pai,
+        // então passar a coordenada de tela aqui a somaria duas vezes (uma via
+        // pai, outra via o próprio valor) e jogaria a imagem para fora da
+        // janela. A diferença entre as duas é o offset relativo correto.
+        .position(
+            Position::new_absolute()
+                .left(draw.min_x() - area.min_x())
+                .top(draw.min_y() - area.min_y()),
+        )
+        .aspect_ratio(AspectRatio::None)
+        .sampling_mode(SamplingMode::Mitchell)
+        .a11y_alt(alt)
+        .into_element()
+}
+
+/// Retângulo (relativo à área) da metade original do comparador.
+///
+/// O pai tem `Position::Absolute` com canto no canto da foto, então o retângulo
+/// da metade original é só `(0, 0)` + a fração cortada da largura. O corte é na
+/// fração `split` da **largura desenhada da foto**, não da janela.
+#[must_use]
+pub fn compare_rect(draw: ScreenRect, area: ScreenRect, split: f32) -> (Point2D, f32) {
+    let offset = Point2D::new(draw.min_x() - area.min_x(), draw.min_y() - area.min_y());
+    (offset, draw.width() * split.clamp(0.0, 1.0))
+}
+
+/// Raio de captura da divisória (px de tela), generoso o bastante para o mouse.
+pub const DIVIDER_GRAB: f32 = 14.0;
+
+/// O cursor está sobre a divisória? (ponto **local** à área do viewer)
+///
+/// Só dentro da faixa vertical da foto: na barra de cima ou nas laterais não há
+/// divisória para arrastar, e roubar o clique dali só atrapalharia o pan.
+#[must_use]
+pub fn hit_divider(p: Point2D, area: ScreenRect, draw: ScreenRect, split: f32) -> bool {
+    if draw.width() <= 0.0 {
+        return false;
+    }
+    let cut = draw.min_x() - area.min_x() + draw.width() * split.clamp(0.0, 1.0);
+    let top = draw.min_y() - area.min_y();
+    let within_y = p.y >= top && p.y <= top + draw.height();
+    within_y && (p.x - cut).abs() <= DIVIDER_GRAB
+}
+
+/// Divisória do comparador: linha vertical + alça arrastável.
+///
+/// Sem a alça, o usuário teria que acertar uma linha de 2px com o mouse — o
+/// mesmo erro de alvo pequeno que já virou bug no star de favorito.
+fn compare_handle(cut: f32, top: f32, height: f32) -> Element {
+    let knob = 22.0;
+    rect()
+        .position(Position::new_absolute().left(cut - 1.).top(top))
+        .width(Size::px(2.))
+        .height(Size::px(height))
+        .background(Color::from_argb(220, 255, 255, 255))
+        .child(
+            rect()
+                .position(
+                    Position::new_absolute()
+                        .left(-(knob / 2.))
+                        .top(height / 2. - knob / 2.),
+                )
+                .width(Size::px(knob))
+                .height(Size::px(knob))
+                .corner_radius(knob / 2.)
+                .background(Color::from_argb(230, 20, 20, 22))
+                .border(Border::new().fill(Color::WHITE).width(1.)),
+        )
+        .into_element()
+}
+
 /// Faixa escura do overlay (coordenadas globais).
 fn band(left: f32, top: f32, right: f32, bottom: f32) -> impl IntoElement {
     rect()
@@ -626,14 +746,24 @@ pub fn context_menu() -> Menu {
         }
     }
     .into();
-    let copy_image: EventHandler<Event<PressEventData>> = (move |_| match services
-        .images
-        .full_image()
-        .map(|img| super::clipboard::copy_image(&img))
-    {
-        Some(Ok(())) => set_status("Imagem copiada."),
-        Some(Err(e)) => set_status(&e),
-        None => set_status("Imagem ainda carregando."),
+    let copy_image: EventHandler<Event<PressEventData>> = ({
+        let services = services.clone();
+        move |_| {
+            if let Some(img) = services.images.full_image() {
+                set_status("Copiando imagem…");
+                std::thread::spawn(move || {
+                    let res = super::clipboard::copy_image(&img);
+                    state::update(AppChannel::Status, |st| {
+                        st.status = match res {
+                            Ok(()) => String::from("Imagem copiada para a área de transferência."),
+                            Err(e) => e,
+                        };
+                    });
+                });
+            } else {
+                set_status("Imagem ainda carregando.");
+            }
+        }
     })
     .into();
     let open_default: EventHandler<Event<PressEventData>> = ({
@@ -660,6 +790,16 @@ pub fn context_menu() -> Menu {
     .into();
     let rename: EventHandler<Event<PressEventData>> =
         (move |_| state::update(AppChannel::Dialogs, state::open_rename)).into();
+    let delete_trash: EventHandler<Event<PressEventData>> = ({
+        let services = services.clone();
+        move |_| {
+            state::update(AppChannel::Photos, |st| {
+                state::delete_current_photo(st, &services);
+            });
+            ContextMenu::close();
+        }
+    })
+    .into();
     let close: EventHandler<Event<PressEventData>> = (move |_| {
         ContextMenu::close();
     })
@@ -677,6 +817,11 @@ pub fn context_menu() -> Menu {
         .child(menu_entry("folder-open", "Mostrar na pasta", reveal))
         .child(menu_divider())
         .child(menu_entry("pencil", "Renomear…", rename))
+        .child(menu_entry(
+            "trash",
+            "Mover para a lixeira (Del)",
+            delete_trash,
+        ))
         .child(menu_entry("x", "Fechar menu", close))
 }
 
@@ -1010,5 +1155,69 @@ mod tests {
         // O px final é válido (antes era `None` = "seleção muito pequena").
         let out = crate::app::crop::crop_to_preview_px(draw, dims, screen).expect("px válido");
         assert!(out.w > 0 && out.h > 0);
+    }
+
+    #[test]
+    fn compare_split_cuts_the_photo_not_the_window() {
+        // A divisória tem de seguir a foto: com a foto menor que o palco, uma
+        // fração da janela deixaria a metade original cortando fora da imagem.
+        let area = stage_at(0., 0., 1000., 800.);
+        let draw = compute_draw(area, (100, 100), 1.0, Vector2D::new(0., 0.));
+        let (offset, width) = compare_rect(draw, area, 0.5);
+        assert_eq!(offset.x, draw.min_x() - area.min_x());
+        assert!((width - draw.width() * 0.5).abs() < 0.01);
+        assert!(width <= draw.width() + 0.01, "nunca passa da foto");
+    }
+
+    #[test]
+    fn compare_split_follows_the_photo_offset() {
+        // Com pan/zoom a foto sai do canto: o recorte precisa acompanhar,
+        // senão a metade original aparece deslocada da metade editada.
+        let area = stage_at(200., 100., 800., 600.);
+        let draw = compute_draw(area, (400, 300), 2.0, Vector2D::new(40., -20.));
+        let (offset, width) = compare_rect(draw, area, 0.25);
+        assert!((offset.x - (draw.min_x() - 200.)).abs() < 0.01);
+        assert!((offset.y - (draw.min_y() - 100.)).abs() < 0.01);
+        assert!((width - draw.width() * 0.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn divider_is_grabbable_only_over_the_photo() {
+        let area = stage_at(0., 0., 800., 600.);
+        let draw = compute_draw(area, (400, 300), 1.0, Vector2D::new(0., 0.));
+        let (_, width) = compare_rect(draw, area, 0.5);
+        let offset = Point2D::new(draw.min_x() - area.min_x(), draw.min_y() - area.min_y());
+        let cut = offset.x + width;
+
+        // Em cima da divisória, dentro da faixa vertical: pega.
+        assert!(hit_divider(Point2D::new(cut, 300.), area, draw, 0.5));
+        // Perto o suficiente ainda pega (alvo generoso).
+        assert!(hit_divider(
+            Point2D::new(cut + DIVIDER_GRAB - 0.5, 300.),
+            area,
+            draw,
+            0.5
+        ));
+        // Fora do alcance lateral: não pega.
+        assert!(!hit_divider(
+            Point2D::new(cut + DIVIDER_GRAB + 1., 300.),
+            area,
+            draw,
+            0.5
+        ));
+        // Acima e abaixo da foto: não pega (senão roubaria o pan das bordas).
+        assert!(!hit_divider(Point2D::new(cut, -10.), area, draw, 0.5));
+        assert!(!hit_divider(
+            Point2D::new(cut, draw.height() + 200.),
+            area,
+            draw,
+            0.5
+        ));
+    }
+
+    #[test]
+    fn divider_never_grabs_on_a_degenerate_photo() {
+        let empty = stage_at(0., 0., 0., 0.);
+        assert!(!hit_divider(Point2D::new(0., 0.), empty, empty, 0.5));
     }
 }

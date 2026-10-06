@@ -1,10 +1,45 @@
 {
-  "name": "photoshow",
-  "description": "Visualizador de fotos rápido em Freya 0.5: abrir pastas/arquivos, navegar, zoom/pan/fullscreen, edição não-destrutiva rotate/crop.",
-  "profile": "desktop-gui",
-  "stack": ["rust", "freya-0.5", "skia", "image-processing", "rfd-native-dialog"],
-  "features": ["open-folder", "open-files", "thumbnails", "zoom-pan-fullscreen", "rotate-crop-nondestructive", "exif-auto-rotate", "save-save-as"],
-  "risks": ["filesystem-write"],
-  "capabilities": ["desktop-gui", "ui", "core"],
-  "ai": {"preferred_models": ["local-default", "cloud-standard"]}
+  "version": 2,
+  "project": {
+    "name": "photoshow",
+    "type": ["desktop", "desktop-gui"]
+  },
+  "stack": {
+    "languages": ["rust"],
+    "runtime": ["freya", "skia"],
+    "tooling": ["cargo", "rustfmt", "clippy"]
+  },
+  "features": [
+    "photo-viewer",
+    "filesystem-navigation",
+    "thumbnail-gallery",
+    "zoom-pan",
+    "non-destructive-editing",
+    "color-adjustments",
+    "metadata-exif",
+    "slideshow-presentation",
+    "batch-processing",
+    "desktop-ui",
+    "packaging"
+  ],
+  "quality": {
+    "performance": "high",
+    "accessibility": true,
+    "security": "standard"
+  },
+  "risk": [
+    "filesystem-write",
+    "destructive-overwrite",
+    "large-image-memory",
+    "untrusted-media"
+  ],
+  "ai": {
+    "orchestrator": "native",
+    "autonomy": "controlled",
+    "preferred_models": [
+      {
+        "id": "default"
+      }
+    ]
+  }
 }

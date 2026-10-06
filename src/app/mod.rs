@@ -4,6 +4,7 @@
 //! atalhos misturados. Aqui a UI vira componentes e o estado vai para o
 //! Freya Radio (`state.rs`), mantendo as mesmas funcionalidades.
 
+pub mod adjust_panel;
 pub mod browser;
 pub mod clipboard;
 pub mod crop;
@@ -66,8 +67,10 @@ pub fn app() -> impl IntoElement {
     apply_async_results(&services);
     refresh_thumbs(&services);
     prefetch_neighbors(&services);
+    step_slideshow_if_active(&services);
 
-    let fullscreen = channel(AppChannel::Viewer).read().fullscreen;
+    let presentation = channel(AppChannel::Photos).read().presentation_mode;
+    let fullscreen = channel(AppChannel::Viewer).read().fullscreen || presentation;
 
     rect()
         .expanded()
@@ -89,6 +92,9 @@ pub fn app() -> impl IntoElement {
         )
         .child(dialogs::RenameDialog)
         .child(dialogs::SettingsDialog)
+        .child(dialogs::HelpDialog)
+        .child(dialogs::ExifDialog)
+        .child(dialogs::BatchDialog)
         .maybe(!fullscreen, |el| {
             el.child(toolbar::Toolbar)
                 .child(
@@ -115,9 +121,15 @@ impl Component for Panels {
     fn render(&self) -> impl IntoElement {
         let maximized = channel(AppChannel::Viewer).read().maximized;
         let cfg = channel(AppChannel::Config);
-        let (hide_browser, hide_gallery) = {
+        let (hide_browser, hide_gallery, hide_adjust, browser_pct, gallery_pct) = {
             let c = cfg.read();
-            (c.config.hide_browser, c.config.hide_gallery)
+            (
+                c.config.hide_browser,
+                c.config.hide_gallery,
+                c.config.hide_adjust,
+                c.config.dock_browser_percent,
+                c.config.dock_gallery_percent,
+            )
         };
 
         // Maximizado, navegador oculto ou galeria oculta viram layouts
@@ -128,51 +140,55 @@ impl Component for Panels {
             return only(viewer::Viewer);
         }
 
-        let vertical = ResizableContainer::new()
-            .direction(Direction::Vertical)
-            .panel(
-                ResizablePanel::new(PanelSize::percent(80.))
-                    .min_size(20.)
-                    .child(viewer::Viewer),
-            )
-            .panel(
-                ResizablePanel::new(PanelSize::percent(20.))
-                    .min_size(8.)
-                    .child(gallery::Gallery),
-            );
-
-        match (hide_browser, hide_gallery) {
-            (true, true) => only(viewer::Viewer),
-            (true, false) => ResizableContainer::new()
-                .direction(Direction::Horizontal)
+        // Coluna esquerda: ajustes em cima, navegador embaixo. O painel de
+        // ajustes divide espaço com o navegador (que tem pasta + lista) em vez
+        // de com o visualizador — o visualizador é o que precisa de pixels.
+        let left = match (hide_adjust, hide_browser) {
+            (false, false) => ResizableContainer::new()
+                .direction(Direction::Vertical)
                 .panel(
-                    ResizablePanel::new(PanelSize::percent(80.))
+                    ResizablePanel::new(PanelSize::percent(40.))
+                        .min_size(15.)
+                        .child(adjust_panel::AdjustPanel),
+                )
+                .panel(
+                    ResizablePanel::new(PanelSize::percent(60.))
+                        .min_size(15.)
+                        .child(browser::Browser),
+                )
+                .into_element(),
+            (false, true) => only(adjust_panel::AdjustPanel),
+            (true, false) => only(browser::Browser),
+            (true, true) => return only(viewer::Viewer),
+        };
+
+        let right = match hide_gallery {
+            false => ResizableContainer::new()
+                .direction(Direction::Vertical)
+                .panel(
+                    ResizablePanel::new(PanelSize::percent(100. - gallery_pct))
                         .min_size(20.)
                         .child(viewer::Viewer),
                 )
                 .panel(
-                    ResizablePanel::new(PanelSize::percent(20.))
+                    ResizablePanel::new(PanelSize::percent(gallery_pct))
                         .min_size(8.)
                         .child(gallery::Gallery),
                 )
                 .into_element(),
-            (false, true) => ResizableContainer::new()
+            true => only(viewer::Viewer),
+        };
+
+        match (hide_browser, hide_gallery) {
+            (true, _) => right,
+            (false, _) => ResizableContainer::new()
                 .direction(Direction::Horizontal)
                 .panel(
-                    ResizablePanel::new(PanelSize::percent(24.))
+                    ResizablePanel::new(PanelSize::percent(browser_pct))
                         .min_size(12.)
-                        .child(browser::Browser),
+                        .child(left),
                 )
-                .panel(ResizablePanel::new(PanelSize::percent(76.)).child(viewer::Viewer))
-                .into_element(),
-            (false, false) => ResizableContainer::new()
-                .direction(Direction::Horizontal)
-                .panel(
-                    ResizablePanel::new(PanelSize::percent(24.))
-                        .min_size(12.)
-                        .child(browser::Browser),
-                )
-                .panel(ResizablePanel::new(PanelSize::percent(76.)).child(vertical))
+                .panel(ResizablePanel::new(PanelSize::percent(100. - browser_pct)).child(right))
                 .into_element(),
         }
     }
@@ -278,5 +294,40 @@ fn apply_async_results(services: &Services) {
                 state::select_photo(st, services, idx, photo);
             });
         }
+    }
+}
+
+/// Avança o slideshow automaticamente com base no intervalo configurado (0.3).
+fn step_slideshow_if_active(services: &Services) {
+    static LAST_STEP: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let active = channel(AppChannel::Photos).read().slideshow_active;
+    if !active {
+        if let Ok(mut slot) = LAST_STEP.lock() {
+            *slot = None;
+        }
+        return;
+    }
+    let interval_secs = channel(AppChannel::Config)
+        .read()
+        .config
+        .slideshow_interval_secs;
+    let now = std::time::Instant::now();
+    let mut should_step = false;
+    if let Ok(mut slot) = LAST_STEP.lock() {
+        match *slot {
+            Some(last) if now.duration_since(last).as_secs() >= interval_secs => {
+                *slot = Some(now);
+                should_step = true;
+            }
+            None => {
+                *slot = Some(now);
+            }
+            _ => {}
+        }
+    }
+    if should_step {
+        state::update(AppChannel::Photos, |st| {
+            state::step(st, services, 1);
+        });
     }
 }

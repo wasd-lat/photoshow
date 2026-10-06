@@ -6,9 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
+use ::exif;
 use photoshow::{
     editor::{CropRect, EditorStack, apply_to_image, bake, save_baked},
-    exif,
+    exif as app_exif,
     fs_browser::{self, PhotoPath, ScanOptions, has_supported_extension, scan_blocking},
     image_store::{DISPLAY_MAX_DIM, decode_photo, image_handle},
 };
@@ -21,6 +22,14 @@ fn write_photo(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
     let path = dir.join(name);
     img.save(&path).expect("gravar png de teste");
     path
+}
+
+/// Escreve uma imagem de teste em `path`, deixando o formato para a extensão.
+fn write_image(path: &Path, w: u32, h: u32) {
+    let img = image::RgbImage::from_fn(w, h, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+    });
+    img.save(path).expect("gravar imagem de teste");
 }
 
 /// Pasta com algumas fotos e um arquivo que não é imagem.
@@ -164,7 +173,7 @@ fn saving_overwrites_and_reloads_with_the_edit_applied() {
         (dec.display.width(), dec.display.height()),
         &editor.state(),
     );
-    save_baked(&baked, &path, 92).expect("salvar");
+    save_baked(&baked, &path, 92, None).expect("salvar");
 
     // Relendo do disco: a foto agora está girada de fato.
     let after = decode_photo(&path).expect("reler");
@@ -185,7 +194,7 @@ fn saving_in_every_supported_format_roundtrips() {
             (dec.display.width(), dec.display.height()),
             &clean,
         );
-        save_baked(&baked, &out, 88).unwrap_or_else(|e| panic!("salvar {ext}: {e}"));
+        save_baked(&baked, &out, 88, None).unwrap_or_else(|e| panic!("salvar {ext}: {e}"));
         assert!(out.exists(), "{ext} não foi criado");
         let reread = decode_photo(&out).unwrap_or_else(|e| panic!("reler {ext}: {e}"));
         assert_eq!(reread.full_size, (120, 90), "{ext} perdeu as dimensões");
@@ -197,9 +206,165 @@ fn missing_orientation_falls_back_to_identity() {
     // Arquivo sem EXIF: a orientação precisa ser 1, sem quebrar o decode.
     let dir = fixture();
     let path = write_photo(dir.path(), "sem_exif.png", 40, 20);
-    assert_eq!(exif::read_orientation(&path), 1);
+    assert_eq!(app_exif::read_orientation(&path), 1);
     let dec = decode_photo(&path).expect("decodificar");
     assert_eq!(dec.full_size, (40, 20));
+}
+
+#[test]
+fn saving_over_the_original_keeps_the_camera_metadata() {
+    // O bug do 0.1: `bake()` reconstrói a imagem do zero, então salvar
+    // sobrescrevendo apagava câmera/data/exposição — metadado que o
+    // photographer não tem como recuperar.
+    let dir = fixture();
+    let path = dir.path().join("camera.jpg");
+    write_photo_with_exif(&path, 60, 40);
+    assert_eq!(
+        app_exif::read_orientation(&path),
+        6,
+        "fixture sem Orientation=6"
+    );
+
+    let dec = decode_photo(&path).expect("decodificar");
+    let mut editor = EditorStack::new();
+    editor.tweak(|a| a.exposure = 0.5);
+    let baked = bake(
+        &dec.full,
+        (dec.display.width(), dec.display.height()),
+        &editor.state(),
+    );
+
+    // `source` = o próprio destino: é assim que o "Sobrescrever" chama.
+    save_baked(&baked, &path, 90, Some(&path)).expect("salvar");
+
+    let meta = photoshow::exif::ExifMeta::read_from(&path).expect("EXIF preservado");
+    assert!(
+        meta.to_tiff_block().is_some(),
+        "o arquivo salvo ficou sem nenhum EXIF"
+    );
+    assert_eq!(
+        model_of(&path),
+        Some(String::from("Photoshow TestCam")),
+        "o modelo da câmera não sobreviveu ao save"
+    );
+    // Orientation vai a 1 porque os pixels salvos já estão orientados.
+    assert_eq!(
+        app_exif::read_orientation(&path),
+        1,
+        "orientation deveria ser 1"
+    );
+}
+
+#[test]
+fn the_saved_orientation_does_not_rotate_the_photo_twice() {
+    // Fecha o cicloOrientation→pixels→save→reload: se a tag antiga voltasse
+    // junto, quem reabrisse o arquivo veria a foto girada de novo.
+    let dir = fixture();
+    let path = dir.path().join("giro.jpg");
+    write_photo_with_exif(&path, 60, 40);
+    let dec = decode_photo(&path).expect("decodificar");
+    // Orientation=6: o decode já entrega a imagem de pé (40x60).
+    assert_eq!(dec.full_size, (40, 60));
+
+    save_baked(&dec.full, &path, 90, Some(&path)).expect("salvar");
+    let after = decode_photo(&path).expect("reabrir");
+    assert_eq!(after.full_size, (40, 60), "a foto girou ao reabrir");
+}
+
+#[test]
+fn a_failed_save_leaves_the_original_untouched() {
+    // A garantia do save atômico: um destino que não pode ser escrito não pode
+    // custar o conteúdo antigo. Gravar direto (o jeito anterior) truncaria.
+    let dir = fixture();
+    let path = dir.path().join("protegida.jpg");
+    write_image(&path, 32, 16);
+    let before = std::fs::read(&path).expect("ler original");
+
+    // Diretório inexistente = destino impossível, sem tocar no original.
+    let impossible = dir.path().join("inexistente").join("x.jpg");
+    let result = save_baked(&decoded_sample(32, 16), &impossible, 90, None);
+    assert!(result.is_err(), "deveria falhar");
+
+    assert_eq!(
+        std::fs::read(&path).expect("ler"),
+        before,
+        "o original foi alterado por um save que falhou"
+    );
+}
+
+#[test]
+fn saving_leaves_no_temporary_file_behind() {
+    // O temporário precisa sumir: um `.foto.png.photoshow-...` na pasta
+    // apareceria na varredura de fotos do próprio app.
+    let dir = fixture();
+    let path = dir.path().join("limpa.png");
+    write_image(&path, 24, 18);
+
+    save_baked(&decoded_sample(24, 18), &path, 90, None).expect("salvar");
+
+    let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+        .expect("listar")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("photoshow-") && n.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temporários órfãos: {leftovers:?}");
+}
+
+/// JPEG com EXIF de câmera, `Orientation=6` e dimensões declaradas.
+fn write_photo_with_exif(path: &Path, w: u32, h: u32) {
+    write_image(path, w, h);
+    let fields = vec![
+        exif::Field {
+            tag: exif::Tag::Orientation,
+            ifd_num: exif::In::PRIMARY,
+            value: exif::Value::Short(vec![6]),
+        },
+        exif::Field {
+            tag: exif::Tag::Model,
+            ifd_num: exif::In::PRIMARY,
+            value: exif::Value::Ascii(vec![b"Photoshow TestCam".to_vec()]),
+        },
+        exif::Field {
+            tag: exif::Tag::PixelXDimension,
+            ifd_num: exif::In::PRIMARY,
+            value: exif::Value::Long(vec![w]),
+        },
+        exif::Field {
+            tag: exif::Tag::PixelYDimension,
+            ifd_num: exif::In::PRIMARY,
+            value: exif::Value::Long(vec![h]),
+        },
+    ];
+    let mut writer = exif::experimental::Writer::new();
+    for f in &fields {
+        writer.push_field(f);
+    }
+    let mut buf = std::io::Cursor::new(Vec::new());
+    writer.write(&mut buf, true).expect("serializar exif");
+    let block = buf.into_inner();
+    assert!(
+        photoshow::exif::embed(path, path, &block),
+        "não consegui montar o fixture com EXIF"
+    );
+}
+
+/// Lê o modelo da câmera de um arquivo.
+fn model_of(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let ex = exif::Reader::new().read_from_container(&mut reader).ok()?;
+    let field = ex.get_field(exif::Tag::Model, exif::In::PRIMARY)?;
+    let text = field.display_value().to_string();
+    let text = text.trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Imagem em memória de `w`x`h`, para testar gravação sem passar por decode.
+fn decoded_sample(w: u32, h: u32) -> image::DynamicImage {
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+    }))
 }
 
 #[test]
@@ -338,5 +503,193 @@ fn undo_after_rotation_restores_the_exact_original_pixels() {
         apply_to_image(&base, &editor.state()),
         base,
         "undo não devolveu a imagem original"
+    );
+}
+
+#[test]
+fn adjust_reaches_the_saved_file_not_only_the_preview() {
+    // O ponto do 0.4: preview e save passam pelo MESMO código. Se o ajuste
+    // aparecesse na tela e não no arquivo, o usuário perderia a edição ao
+    // salvar — e o teste é o que garante que isso não volta.
+    let dir = fixture();
+    let path = write_photo(dir.path(), "ajuste.png", 80, 60);
+    let dec = decode_photo(&path).expect("decodificar");
+    let dims = (dec.display.width(), dec.display.height());
+
+    let mut editor = EditorStack::new();
+    editor.tweak(|a| a.exposure = 2.0);
+    assert!(editor.state().adjust.exposure > 0.0);
+
+    let baked = bake(&dec.full, dims, &editor.state());
+    save_baked(&baked, &path, 92, None).expect("salvar");
+
+    // Relendo do disco: os pixels têm de estar mais claros.
+    let after = decode_photo(&path).expect("reler");
+    let before_px = dec.full.to_rgb8().get_pixel(10, 10).0;
+    let after_px = after.full.to_rgb8().get_pixel(10, 10).0;
+    assert!(
+        after_px[0] > before_px[0],
+        "exposição não chegou ao arquivo: {before_px:?} -> {after_px:?}"
+    );
+}
+
+#[test]
+fn preview_and_bake_agree_on_the_geometry_after_an_adjust() {
+    // Ajustes são por pixel, crop é por retângulo: aplicar o crop depois do
+    // ajuste não pode trocar a geometria nem o tamanho.
+    let dir = fixture();
+    let path = write_photo(dir.path(), "combo.png", 200, 100);
+    let dec = decode_photo(&path).expect("decodificar");
+    let dims = (dec.display.width(), dec.display.height());
+
+    let mut editor = EditorStack::new();
+    editor.set_crop(Some(CropRect {
+        x: 10,
+        y: 10,
+        w: 80,
+        h: 50,
+    }));
+    editor.tweak(|a| {
+        a.exposure = 1.0;
+        a.saturation = 0.5;
+    });
+
+    let preview = apply_to_image(&dec.display, &editor.state());
+    let baked = bake(&dec.full, dims, &editor.state());
+    // Mesma proporção entre preview e arquivo, mesmo com o ajuste no meio.
+    let pw = preview.width() as f64 / preview.height() as f64;
+    let bw = baked.width() as f64 / baked.height() as f64;
+    assert!(
+        (pw - bw).abs() < 0.01,
+        "preview {pw:.3} x bake {bw:.3}: geometrias divergentes"
+    );
+}
+
+#[test]
+fn undo_after_a_slider_drag_jumps_back_the_whole_drag() {
+    // Regressão de UX: arrastar um slider dispara dezenas de eventos. Se cada
+    // um virasse um passo de undo, o Ctrl+Z voltaria 1% por vez.
+    let dir = fixture();
+    let _ = dir;
+    let mut editor = EditorStack::new();
+    for i in 0..40 {
+        editor.tweak(|a| a.exposure = i as f32 * 0.05);
+    }
+    assert!(editor.state().adjust.exposure > 0.0);
+
+    // Um único undo volta ao neutro.
+    assert!(editor.undo());
+    assert!(editor.state().adjust.is_clean(),);
+}
+
+#[test]
+fn undo_does_not_swallow_a_previous_rotation() {
+    // A fusão do arrasto do slider só pode juntar ajustes **entre si**: se ela
+    // juntasse com a rotação, o Ctrl+Z depois de um ajuste perderia o
+    // enquadramento do usuário.
+    let mut editor = EditorStack::new();
+    editor.rotate_cw((100, 50));
+    assert_eq!(editor.state().rot, 1);
+    editor.tweak(|a| a.contrast = 0.5);
+
+    assert!(editor.undo());
+    assert_eq!(editor.state().rot, 1, "a rotação não pode sumir no undo");
+    assert!(editor.state().adjust.is_clean());
+
+    assert!(editor.undo());
+    assert_eq!(editor.state().rot, 0, "o segundo undo desfaz a rotação");
+}
+
+#[test]
+fn compare_base_keeps_the_geometry_and_drops_only_the_color() {
+    // Regressão do comparador: se a metade "antes" fosse desenhada sem a
+    // rotação ao lado de uma preview girada, as duas metades ficariam
+    // desalinhadas e a comparação mentiria. Ela tem que preservar rot/crop e
+    // zerar só a cor.
+    let dir = fixture();
+    let path = write_photo(dir.path(), "compara.png", 200, 100);
+    let dec = decode_photo(&path).expect("decodificar");
+    let base = dec.display.clone();
+
+    let mut editor = EditorStack::new();
+    editor.rotate_cw((base.width(), base.height()));
+    editor.tweak(|a| a.exposure = 2.0);
+
+    let preview = apply_to_image(&base, &editor.state());
+    let compare = apply_to_image(
+        &base,
+        &photoshow::editor::EditorState {
+            adjust: Default::default(),
+            ..editor.state()
+        },
+    );
+
+    assert_eq!(
+        (compare.width(), compare.height()),
+        (preview.width(), preview.height()),
+        "as metades precisam ter a mesma geometria para o split fechar"
+    );
+    // E a comparação é realmente sobre a cor: os pixels diferem.
+    assert_ne!(
+        compare.to_rgba8().as_raw(),
+        preview.to_rgba8().as_raw(),
+        "o comparador precisa mostrar a diferença de cor"
+    );
+}
+
+#[test]
+fn zeroing_the_adjustments_keeps_the_crop_and_the_rotation() {
+    // "Zerar ajustes" e "Reset" são intenções diferentes: o primeiro joga fora
+    // a cor, não o enquadramento.
+    let mut editor = EditorStack::new();
+    editor.rotate_cw((100, 50));
+    editor.set_crop(Some(CropRect {
+        x: 5,
+        y: 5,
+        w: 20,
+        h: 10,
+    }));
+    editor.tweak(|a| a.temperature = 0.8);
+
+    editor.reset_adjust();
+    let st = editor.state();
+    assert!(st.adjust.is_clean());
+    assert_eq!(st.rot, 1, "a rotação tem de sobreviver");
+    assert_eq!(
+        st.crop,
+        Some(CropRect {
+            x: 5,
+            y: 5,
+            w: 20,
+            h: 10
+        })
+    );
+    assert!(
+        editor.is_dirty(),
+        "ainda há edição: o crop e a rotação contam"
+    );
+}
+
+#[test]
+fn histogram_reports_clipping_caused_by_the_adjustment_itself() {
+    // É para isso que o overlay existe: o usuário precisa ver que o +EV
+    // estourou antes de salvar, não depois de perder o detalhe.
+    // 200, não 250: 250 já é exatamente o limiar de clipping (`CLIP_HIGH = 250`),
+    // então a imagem começaria marcada como estourada antes do ajuste.
+    let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        32,
+        32,
+        image::Rgb([200, 200, 200]),
+    ));
+    let clean = photoshow::adjust::histogram(img.to_rgba8().as_raw(), 1);
+    assert_eq!(clean.blowout, 0, "nada estourado antes do ajuste");
+
+    let mut editor = EditorStack::new();
+    editor.tweak(|a| a.exposure = 3.0);
+    let boosted = apply_to_image(&img, &editor.state());
+    let after = photoshow::adjust::histogram(boosted.to_rgba8().as_raw(), 1);
+    assert!(
+        after.blowout > 0,
+        "o ajuste estourou e o histograma não avisou"
     );
 }

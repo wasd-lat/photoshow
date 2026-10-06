@@ -457,7 +457,15 @@ mod tests {
 
     #[test]
     fn light_and_dark_are_classified() {
-        for name in ["slate", "charcoal", "tokyo-night", "nord", "zed-dark", "gruvbox", "nyancat"] {
+        for name in [
+            "slate",
+            "charcoal",
+            "tokyo-night",
+            "nord",
+            "zed-dark",
+            "gruvbox",
+            "nyancat",
+        ] {
             assert!(is_dark(name), "{name} deveria ser escuro");
         }
         for name in ["frost", "paper", "zed-light"] {

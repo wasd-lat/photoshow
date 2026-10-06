@@ -454,3 +454,394 @@ fn theme_row(
             }),
         ))
 }
+
+/// Fecha o modal de ajuda.
+fn close_help() {
+    state::update(AppChannel::Dialogs, |st| st.help_open = false);
+}
+
+/// Fecha o modal de metadados EXIF.
+fn close_exif() {
+    state::update(AppChannel::Dialogs, |st| st.exif_open = false);
+}
+
+#[derive(PartialEq, Clone)]
+pub struct HelpDialog;
+
+impl HelpDialog {}
+
+impl Component for HelpDialog {
+    fn render(&self) -> impl IntoElement {
+        let dialogs = channel(AppChannel::Dialogs);
+        let open = dialogs.read().help_open;
+        let cfg = channel(AppChannel::Config).read().config.clone();
+
+        let m = ui::Metrics::new(cfg.ui_scale);
+        let p = crate::theme::palette(&cfg.theme);
+        let text_primary = p.text_primary.to_color();
+        let text_secondary = p.text_secondary.to_color();
+
+        let close: EventHandler<Event<PressEventData>> = (move |_| close_help()).into();
+        let scroll_height = (400.0f32 * m.scale()).clamp(280.0f32, 500.0f32);
+
+        let shortcuts_list: &[(&str, &str)] = &[
+            ("← / →", "Foto anterior / próxima"),
+            ("+ / - / 0", "Zoom in / out / resetar"),
+            ("F11", "Tela cheia"),
+            ("F9", "Maximizar visualizador"),
+            ("Espaço", "Iniciar / pausar slideshow"),
+            ("Ctrl+1", "Ocultar / mostrar navegador"),
+            ("Ctrl+2", "Ocultar / mostrar galeria"),
+            ("Ctrl+3", "Ocultar / mostrar ajustes"),
+            ("Ctrl+0", "Restaurar layout de painéis"),
+            ("Ctrl+B", "Comparar com original"),
+            ("Ctrl+I", "Metadados EXIF da foto"),
+            ("Ctrl+O", "Abrir arquivos"),
+            ("Ctrl+Shift+O", "Abrir pasta"),
+            ("Ctrl+Z / Ctrl+Y", "Desfazer / refazer"),
+            ("F2", "Renomear arquivo"),
+            ("Enter", "Aplicar recorte (crop)"),
+            ("1 .. 5", "Avaliar foto (estrelas)"),
+            ("Esc", "Fechar modal / sair de fullscreen"),
+            ("F1 / ?", "Esta janela de atalhos"),
+        ];
+
+        let body = rect()
+            .vertical()
+            .spacing(m.gap(1.5))
+            .child(PopupTitle::new(String::from("Atalhos de Teclado")))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(scroll_height))
+                    .child(
+                        ScrollView::new().child(
+                            rect()
+                                .width(Size::fill())
+                                .padding(ui::gaps(&m, 1., 1.5))
+                                .spacing(m.gap(1.5))
+                                .children(shortcuts_list.iter().map(|(key, desc)| {
+                                    rect()
+                                        .width(Size::fill())
+                                        .horizontal()
+                                        .main_align(Alignment::SpaceBetween)
+                                        .cross_align(Alignment::Center)
+                                        .padding(ui::gaps(&m, 0.5, 1.))
+                                        .border(
+                                            Border::new()
+                                                .width(1.)
+                                                .alignment(BorderAlignment::Inner)
+                                                .fill(Color::from_argb(30, 128, 128, 136)),
+                                        )
+                                        .corner_radius(m.radius_sm())
+                                        .child(
+                                            rect()
+                                                .padding(ui::gaps(&m, 0.2, 0.8))
+                                                .background(Color::from_argb(35, 128, 128, 136))
+                                                .corner_radius(m.radius_sm())
+                                                .child(ui::text(
+                                                    &m,
+                                                    ui::Role::Small,
+                                                    text_primary,
+                                                    *key,
+                                                )),
+                                        )
+                                        .child(ui::text(&m, ui::Role::Body, text_secondary, *desc))
+                                })),
+                        ),
+                    ),
+            )
+            .child(
+                PopupButtons::new().child(Button::new().filled().on_press(close).child("Fechar")),
+            );
+
+        Popup::new()
+            .on_close_request(move |_| close_help())
+            .maybe(open, |popup| popup.child(body))
+    }
+}
+
+#[derive(PartialEq, Clone)]
+pub struct ExifDialog;
+
+impl ExifDialog {}
+
+impl Component for ExifDialog {
+    fn render(&self) -> impl IntoElement {
+        let photos = channel(AppChannel::Photos);
+        let dialogs = channel(AppChannel::Dialogs);
+        let open = dialogs.read().exif_open;
+        let cfg = channel(AppChannel::Config).read().config.clone();
+
+        let current = photos.read().current.clone();
+        let details = photos.read().exif_details.clone();
+        let sidecar = photos.read().sidecar.clone();
+
+        let m = ui::Metrics::new(cfg.ui_scale);
+        let p = crate::theme::palette(&cfg.theme);
+        let text_primary = p.text_primary.to_color();
+        let text_secondary = p.text_secondary.to_color();
+
+        let close: EventHandler<Event<PressEventData>> = (move |_| close_exif()).into();
+
+        let file_name = current
+            .as_ref()
+            .map(|c| c.display_name())
+            .unwrap_or_else(|| String::from("Nenhuma foto selecionada"));
+
+        let rating = current
+            .as_ref()
+            .map(|c| sidecar.get_rating(&c.display_name()))
+            .unwrap_or(0);
+
+        let rating_str = if rating > 0 {
+            format!("{} de 5 estrelas", "★".repeat(rating as usize))
+        } else {
+            String::from("Sem avaliação")
+        };
+
+        let mut rows: Vec<(&str, String)> = Vec::new();
+        rows.push(("Arquivo", file_name));
+        rows.push(("Avaliação", rating_str));
+
+        if let Some(d) = details {
+            if let Some(cam) = d.camera_model.or(d.camera_make) {
+                rows.push(("Câmera", cam));
+            }
+            if let Some(lens) = d.lens_model {
+                rows.push(("Lente", lens));
+            }
+            if let Some(dt) = d.date_time {
+                rows.push(("Data / Hora", dt));
+            }
+            if let Some((w, h)) = d.dimensions {
+                rows.push(("Dimensões", format!("{w} × {h} px")));
+            }
+            if let Some(exp) = d.exposure_time {
+                rows.push(("Exposição", exp));
+            }
+            if let Some(f) = d.f_number {
+                rows.push(("Abertura", f));
+            }
+            if let Some(iso) = d.iso {
+                rows.push(("ISO", iso));
+            }
+            if let Some(fl) = d.focal_length {
+                rows.push(("Distância Focal", fl));
+            }
+        }
+
+        let body = rect()
+            .vertical()
+            .spacing(m.gap(1.5))
+            .child(PopupTitle::new(String::from("Metadados da Imagem")))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .padding(ui::gaps(&m, 1., 1.5))
+                    .spacing(m.gap(1.5))
+                    .children(rows.into_iter().map(|(label, val)| {
+                        rect()
+                            .width(Size::fill())
+                            .horizontal()
+                            .main_align(Alignment::SpaceBetween)
+                            .cross_align(Alignment::Center)
+                            .padding(ui::gaps(&m, 0.4, 0.8))
+                            .child(ui::text(&m, ui::Role::Body, text_secondary, label))
+                            .child(ui::text(&m, ui::Role::Body, text_primary, val))
+                    })),
+            )
+            .child(
+                PopupButtons::new().child(Button::new().filled().on_press(close).child("Fechar")),
+            );
+
+        Popup::new()
+            .on_close_request(move |_| close_exif())
+            .maybe(open, |popup| popup.child(body))
+    }
+}
+
+/// Fecha o modal de lote.
+fn close_batch() {
+    state::update(AppChannel::Dialogs, |st| st.batch_open = false);
+}
+
+#[derive(PartialEq, Clone)]
+pub struct BatchDialog;
+
+impl BatchDialog {}
+
+impl Component for BatchDialog {
+    fn render(&self) -> impl IntoElement {
+        let photos = channel(AppChannel::Photos);
+        let dialogs = channel(AppChannel::Dialogs);
+        let open = dialogs.read().batch_open;
+        let progress = dialogs.read().batch_progress.clone();
+        let cfg = channel(AppChannel::Config).read().config.clone();
+
+        let m = ui::Metrics::new(cfg.ui_scale);
+        let p = crate::theme::palette(&cfg.theme);
+        let text_primary = p.text_primary.to_color();
+        let text_secondary = p.text_secondary.to_color();
+
+        let dest_state = use_state(|| {
+            photos
+                .read()
+                .current_dir
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        });
+        let pattern_state = use_state(|| String::from("foto_{i}"));
+        let cancel_flag =
+            use_hook(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+
+        let is_running = progress.as_ref().map(|pr| !pr.finished).unwrap_or(false);
+
+        let close: EventHandler<Event<PressEventData>> = (move |_| close_batch()).into();
+
+        let start: EventHandler<Event<PressEventData>> = {
+            let photos_list = photos.read().visible.clone();
+            let dest_dir = dest_state.read().clone();
+            let pattern = pattern_state.read().clone();
+            let cancel = cancel_flag.clone();
+
+            move |_| {
+                cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+                let config = crate::batch::BatchConfig {
+                    rotate_cw: 0,
+                    max_dim: Some(1920),
+                    format: String::from("jpg"),
+                    jpeg_quality: 90,
+                    name_pattern: pattern.clone(),
+                    dest_dir: dest_dir.clone(),
+                };
+                let cancel_handle = cancel.clone();
+                crate::batch::run_batch(photos_list.clone(), config, cancel_handle, move |prog| {
+                    state::update(AppChannel::Dialogs, |st| {
+                        st.batch_progress = Some(prog);
+                    });
+                });
+            }
+        }
+        .into();
+
+        let cancel_press: EventHandler<Event<PressEventData>> = {
+            let cancel = cancel_flag.clone();
+            move |_| {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        .into();
+
+        let choose_folder: EventHandler<Event<PressEventData>> = {
+            let mut dest_state = dest_state;
+            move |_| {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    dest_state.set(folder);
+                }
+            }
+        }
+        .into();
+
+        let body = rect()
+            .vertical()
+            .spacing(m.gap(1.5))
+            .child(PopupTitle::new(String::from("Processamento em Lote (0.5)")))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .padding(ui::gaps(&m, 1., 1.5))
+                    .spacing(m.gap(1.5))
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .horizontal()
+                            .main_align(Alignment::SpaceBetween)
+                            .cross_align(Alignment::Center)
+                            .child(ui::text(&m, ui::Role::Body, text_secondary, "Destino:"))
+                            .child(
+                                Button::new()
+                                    .outline()
+                                    .on_press(choose_folder)
+                                    .child(dest_state.read().display().to_string()),
+                            ),
+                    )
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .horizontal()
+                            .main_align(Alignment::SpaceBetween)
+                            .cross_align(Alignment::Center)
+                            .child(ui::text(
+                                &m,
+                                ui::Role::Body,
+                                text_secondary,
+                                "Padrão de nome:",
+                            ))
+                            .child(Input::new(pattern_state).width(Size::px(180.))),
+                    )
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .horizontal()
+                            .main_align(Alignment::SpaceBetween)
+                            .cross_align(Alignment::Center)
+                            .child(ui::text(
+                                &m,
+                                ui::Role::Body,
+                                text_secondary,
+                                "Fotos na fila:",
+                            ))
+                            .child(ui::text(
+                                &m,
+                                ui::Role::Body,
+                                text_primary,
+                                format!("{} fotos", photos.read().visible.len()),
+                            )),
+                    )
+                    .maybe_child(progress.as_ref().map(|prog| {
+                        let text = if prog.finished {
+                            if prog.cancelled {
+                                String::from("Cancelado pelo usuário.")
+                            } else {
+                                format!(
+                                    "Concluído: {} fotos salvas, {} falhas.",
+                                    prog.successes,
+                                    prog.failures.len()
+                                )
+                            }
+                        } else {
+                            format!(
+                                "Processando {}/{} ({})",
+                                prog.current, prog.total, prog.current_file
+                            )
+                        };
+                        rect()
+                            .width(Size::fill())
+                            .padding(ui::gaps(&m, 0.5, 1.))
+                            .background(Color::from_argb(35, 128, 128, 136))
+                            .corner_radius(m.radius_sm())
+                            .child(ui::text(&m, ui::Role::Small, text_primary, text))
+                    })),
+            )
+            .child(
+                PopupButtons::new()
+                    .maybe(!is_running, |btns| {
+                        btns.child(Button::new().filled().on_press(start).child("Iniciar Lote"))
+                            .child(Button::new().outline().on_press(close).child("Fechar"))
+                    })
+                    .maybe(is_running, |btns| {
+                        btns.child(
+                            Button::new()
+                                .filled()
+                                .on_press(cancel_press)
+                                .child("Cancelar"),
+                        )
+                    }),
+            );
+
+        Popup::new()
+            .on_close_request(move |_| close_batch())
+            .maybe(open, |popup| popup.child(body))
+    }
+}

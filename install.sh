@@ -31,9 +31,18 @@ echo "--> baixando $URL"
 curl -fsSL --retry 3 -o "$TMP/photoshow.tar.gz" "$URL"
 tar xzf "$TMP/photoshow.tar.gz" -C "$TMP"
 
-install -Dm755 "$TMP/photoshow" "$BIN_DIR/photoshow"
-install -Dm644 "$TMP/photoshow.desktop" "$APP_DIR/photoshow.desktop"
-install -Dm644 "$TMP/photoshow.svg" "$ICON_DIR/photoshow.svg" 2>/dev/null || true
+SRC_DIR="$TMP"
+if [ ! -f "$SRC_DIR/photoshow" ]; then
+  # Localiza o subdiretório extraído caso o tarball empacote a pasta de staging
+  FOUND_DIR="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if [ -n "$FOUND_DIR" ] && [ -f "$FOUND_DIR/photoshow" ]; then
+    SRC_DIR="$FOUND_DIR"
+  fi
+fi
+
+install -Dm755 "$SRC_DIR/photoshow" "$BIN_DIR/photoshow"
+install -Dm644 "$SRC_DIR/photoshow.desktop" "$APP_DIR/photoshow.desktop"
+install -Dm644 "$SRC_DIR/photoshow.svg" "$ICON_DIR/photoshow.svg" 2>/dev/null || true
 
 # Aponta o .desktop para o binário instalado (tarball usa nome genérico).
 sed -i "s|^Exec=.*|Exec=$BIN_DIR/photoshow %F|" "$APP_DIR/photoshow.desktop"

@@ -201,13 +201,14 @@ impl Services {
         dest: PathBuf,
         jpeg_quality: u8,
         reload: bool,
+        source: Option<PathBuf>,
     ) {
         let this = self.clone();
         let mut this = this;
         background(async move {
             let outcome = thread(move || {
                 let baked = bake(&full, display_base, &edit);
-                match save_baked(&baked, &dest, jpeg_quality) {
+                match save_baked(&baked, &dest, jpeg_quality, source.as_deref()) {
                     Ok(()) => SaveOutcome {
                         note: format!("Salvo em {}", dest.display()),
                         reload: reload.then_some(dest),

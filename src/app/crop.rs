@@ -100,13 +100,15 @@ pub enum DragKind2 {
     },
 }
 
-/// Gesto em andamento no visualizador (pan ou crop).
+/// Gesto em andamento no visualizador (pan, crop ou divisória do comparador).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DragKind {
     /// Arrasto de pan; guarda a última posição do cursor.
     Pan(CursorPoint),
     /// Arrasto de crop.
     Crop(DragKind2),
+    /// Arrasto da divisória do comparador.
+    Compare,
 }
 
 /// Alça mais próxima do ponto (raio [`HANDLE_GRAB`]); devolve (alça, âncora).
