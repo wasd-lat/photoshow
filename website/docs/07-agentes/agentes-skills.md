@@ -2,10 +2,23 @@
 
 > **Status: aprovado**
 
-Workforce do Prumo (`poppy-team/prumo`, `src/prumo/resources/workforce`):
+Workforce do Prumo ([poppy-lat/prumo](https://github.com/poppy-lat/prumo),
+[`src/prumo/resources/workforce`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce)):
 39 agentes, 189 skills, 20 recipes. Este documento lista o que é obrigatório,
 o que é complementar e o que é proibido para o PhotoShow — um app desktop
 Rust/Freya de visualização e edição leve.
+
+## Fontes (links diretos)
+
+| O quê | Onde |
+|---|---|
+| Repositório Prumo | [poppy-lat/prumo](https://github.com/poppy-lat/prumo) |
+| Workforce (raiz) | [`src/prumo/resources/workforce`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce) |
+| Agentes (39) | [`workforce/agents`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce/agents) |
+| Skills (189) | [`workforce/skills`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce/skills) |
+| Recipes (20) | [`workforce/recipes`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce/recipes) |
+| Skill de acessibilidade | [`skills/accessibility`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce/skills/accessibility) |
+| Skills locais instaladas | `~/.agents/skills/<nome>/SKILL.md` |
 
 Nada aqui inventa agente ou skill: nomes são os do repositório Prumo. O que
 este documento decide é **quais** valem para este projeto e **quando**.
@@ -104,6 +117,9 @@ Radio), `serialization` (config/sidecar TOML+JSON), `api-contract-testing`
 
 ## Recipes do Prumo aplicáveis
 
+Fontes:
+[`workforce/recipes`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce/recipes).
+
 | Recipe | Uso no PhotoShow |
 |---|---|
 | `bug-fix` | correção com regressão (menu Arquivo, crop, EXIF) |
@@ -120,6 +136,9 @@ Radio), `serialization` (config/sidecar TOML+JSON), `api-contract-testing`
 ## Como acionar
 
 Agente e skill do Prumo são playbooks: antes de implementar, o code agent
-lê a skill correspondente (`~/.agents/skills/<nome>/SKILL.md`) e segue o
-checklist. O `accessibility-reviewer` + skills de a11y rodam em toda mudança
-de UI — sem exceção, sem "depois a gente vê".
+lê a skill correspondente (`~/.agents/skills/<nome>/SKILL.md`, fonte remota em
+[`workforce/skills`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce/skills))
+e segue o checklist. O `accessibility-reviewer`
+([`workforce/agents/accessibility-reviewer`](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce/agents/accessibility-reviewer))
++ skills de a11y rodam em toda mudança de UI — sem exceção, sem "depois a
+gente vê".

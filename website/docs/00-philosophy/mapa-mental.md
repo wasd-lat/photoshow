@@ -27,9 +27,11 @@ Afirmação sem evidence é proposta.
 - **Arquivo histórico**: `PHOTOSHOW_ENGINEERING_PRUMO_PLAN.md` (monolito de
   1898 linhas) — foi a fonte desta documentação, hoje é referência, não
   autoridade.
-- **Fornecedores de playbook**: Prumo (`poppy-team/prumo`) — agentes,
-  skills, recipes. O Prumo governa contratos e workflow; o PhotoShow é dono
-  das decisões de produto.
+- **Fornecedores de playbook**: Prumo
+  ([poppy-lat/prumo](https://github.com/poppy-lat/prumo),
+  [workforce](https://github.com/poppy-lat/prumo/tree/main/src/prumo/resources/workforce))
+  — agentes, skills, recipes. O Prumo governa contratos e workflow; o
+  PhotoShow é dono das decisões de produto.
 - **Referência de stack do site**: Petunia3D (`website/` zero-build) — mesma
   filosofia, mesmo formato, outro projeto.
 
