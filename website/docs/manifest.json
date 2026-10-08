@@ -1,0 +1,116 @@
+{
+  "domains": [
+    {
+      "id": "philosophy",
+      "title": "Filosofia",
+      "files": [
+        {
+          "path": "00-philosophy/mapa-mental.md",
+          "title": "Mapa mental da filosofia"
+        },
+        {
+          "path": "00-philosophy/organizacao-principios.md",
+          "title": "Princípios da organização"
+        },
+        {
+          "path": "00-philosophy/qualidade-estilo.md",
+          "title": "Qualidade e estilo de código"
+        },
+        {
+          "path": "00-philosophy/triagem-codigo-atual.md",
+          "title": "Triagem do código atual"
+        }
+      ]
+    },
+    {
+      "id": "media",
+      "title": "Media",
+      "files": [
+        {
+          "path": "01-media/decisao-arquitetural.md",
+          "title": "Decisão arquitetural"
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "title": "Editor",
+      "files": [
+        {
+          "path": "02-editor/decisao-arquitetural.md",
+          "title": "Decisão arquitetural"
+        },
+        {
+          "path": "02-editor/novas-edicoes.md",
+          "title": "Novas edições — proposta"
+        }
+      ]
+    },
+    {
+      "id": "application",
+      "title": "Application",
+      "files": [
+        {
+          "path": "03-application/decisao-arquitetural.md",
+          "title": "Decisão arquitetural"
+        },
+        {
+          "path": "03-application/organizacao-classificacao.md",
+          "title": "Organização e classificação — proposta"
+        }
+      ]
+    },
+    {
+      "id": "interface",
+      "title": "Interface",
+      "files": [
+        {
+          "path": "04-interface/decisao-arquitetural.md",
+          "title": "Decisão arquitetural"
+        },
+        {
+          "path": "04-interface/textos-i18n.md",
+          "title": "Textos tokenizados e i18n — proposta"
+        }
+      ]
+    },
+    {
+      "id": "persistence",
+      "title": "Persistência",
+      "files": [
+        {
+          "path": "05-persistencia/decisao-arquitetural.md",
+          "title": "Decisão arquitetural"
+        }
+      ]
+    },
+    {
+      "id": "release",
+      "title": "Release",
+      "files": [
+        {
+          "path": "06-release/decisao-arquitetural.md",
+          "title": "Decisão arquitetural"
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Code Agents",
+      "files": [
+        {
+          "path": "07-agentes/estrategia-testes.md",
+          "title": "Estratégia de testes"
+        },
+        {
+          "path": "07-agentes/agentes-skills.md",
+          "title": "Agentes e skills"
+        },
+        {
+          "path": "07-agentes/diretivas-llm.md",
+          "title": "Diretivas para LLMs"
+        }
+      ]
+    }
+  ]
+}

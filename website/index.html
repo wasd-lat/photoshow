@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="pt-BR" class="wa-theme-default" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Documentação arquitetural e caderno vivo da organização do PhotoShow.">
+  <meta name="color-scheme" content="light dark">
+  <title>PhotoShow — Documentação</title>
+
+  <script>
+    (function () {
+      var theme = "light";
+      try {
+        if (localStorage.getItem("photoshow-docs-theme") === "dark") {
+          theme = "dark";
+        }
+      } catch (_) {}
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+
+  <link rel="stylesheet" href="https://ka-f.webawesome.com/webawesome@3.14.0/styles/themes/default.css">
+  <script type="module" src="https://ka-f.webawesome.com/webawesome@3.14.0/webawesome.loader.js"></script>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.2/src/regular/style.css">
+
+  <link rel="stylesheet" href="./styles.css">
+
+  <script defer src="https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.umd.js"></script>
+  <script defer src="./app.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.17.4/dist/cdn.min.js"></script>
+</head>
+
+<body
+  x-data="{ navOpen: false }"
+  @keydown.escape.window="navOpen = false"
+  @close-nav.window="navOpen = false"
+>
+  <a class="skip-link" href="#content">Pular para o conteúdo</a>
+
+  <header class="topbar">
+    <div class="brand-zone">
+      <button
+        class="icon-button mobile-menu"
+        type="button"
+        aria-label="Abrir navegação"
+        :aria-expanded="navOpen.toString()"
+        @click="navOpen = !navOpen"
+      >
+        <i class="ph ph-list" aria-hidden="true"></i>
+      </button>
+
+      <a class="brand" href="#/docs/home.md" aria-label="PhotoShow — início da documentação">
+        <span class="brand-mark" aria-hidden="true">p</span>
+        <span>photoshow</span>
+      </a>
+    </div>
+
+    <div class="header-actions">
+      <nav class="topnav" aria-label="Navegação principal">
+        <a href="#/docs/home.md">documentação</a>
+        <a href="#/docs/about.md">sobre</a>
+      </nav>
+
+      <button
+        id="themeToggle"
+        class="icon-button theme-toggle"
+        type="button"
+        aria-label="Ativar tema escuro"
+        aria-pressed="false"
+        title="Ativar tema escuro"
+      >
+        <i class="ph ph-moon" aria-hidden="true"></i>
+      </button>
+
+      <div class="search-wrap">
+        <label class="sr-only" for="search">Buscar na documentação</label>
+        <wa-input
+          id="search"
+          type="search"
+          size="s"
+          appearance="filled-outlined"
+          placeholder="Buscar na documentação"
+          autocomplete="off"
+          spellcheck="false"
+          with-clear
+        >
+          <i class="ph ph-magnifying-glass" slot="start" aria-hidden="true"></i>
+          <kbd slot="end" class="shortcut-key" aria-hidden="true">/</kbd>
+        </wa-input>
+
+        <div
+          id="searchResults"
+          class="search-results"
+          role="listbox"
+          aria-label="Resultados da busca"
+          hidden
+        ></div>
+      </div>
+    </div>
+  </header>
+
+  <div
+    class="sidebar-backdrop"
+    x-cloak
+    x-show="navOpen"
+    x-transition.opacity
+    @click="navOpen = false"
+    aria-hidden="true"
+  ></div>
+
+  <div class="app-shell">
+    <aside
+      class="sidebar"
+      id="sidebar"
+      :class="{ 'is-open': navOpen }"
+      aria-label="Índice da documentação"
+    >
+      <div class="sidebar-heading">
+        <div>
+          <span class="eyebrow">Referência técnica</span>
+          <strong>Documentação</strong>
+        </div>
+        <button id="collapseAll" class="quiet-button" type="button">
+          <i class="ph ph-arrows-in-line-vertical" aria-hidden="true"></i>
+          <span>recolher</span>
+        </button>
+      </div>
+
+      <nav id="docNav" class="doc-nav" aria-label="Domínios e arquivos"></nav>
+    </aside>
+
+    <main id="content" class="content" tabindex="-1">
+      <div class="loading-card" role="status">
+        <span class="loading-dot" aria-hidden="true"></span>
+        Carregando documentação…
+      </div>
+    </main>
+
+    <aside class="toc" id="toc" aria-label="Nesta página">
+      <div class="toc-header">
+        <i class="ph ph-list-bullets" aria-hidden="true"></i>
+        <span>Nesta página</span>
+      </div>
+      <nav id="pageToc"></nav>
+    </aside>
+  </div>
+
+  <noscript>
+    <div class="noscript">Esta documentação precisa de JavaScript habilitado para carregar os arquivos Markdown.</div>
+  </noscript>
+</body>
+</html>
